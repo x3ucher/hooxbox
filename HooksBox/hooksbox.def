@@ -1,0 +1,3 @@
+LIBRARY HookDll
+EXPORTS
+    InitializeMyHooks
