@@ -1,26 +1,24 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <tlhelp32.h>  // Добавьте этот заголовочный файл!
+#include <tlhelp32.h> 
 #include <iostream>
 #include <string>
 
-#pragma comment(lib, "kernel32.lib")  // Для функций ToolHelp
+#pragma comment(lib, "kernel32.lib")
 
-// Функция для создания приостановленного процесса
 HANDLE CreateSuspendedProcess(const std::wstring& exePath) {
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi;
 
-    // Создаем процесс в приостановленном состоянии
     if (!CreateProcessW(
-        NULL,                    // Имя модуля (NULL = из командной строки)
-        (LPWSTR)exePath.c_str(), // Командная строка
-        NULL,                    // Атрибуты процесса
-        NULL,                    // Атрибуты потока
-        FALSE,                   // Наследование дескрипторов
-        CREATE_SUSPENDED,        // Флаги создания (ВАЖНО!)
-        NULL,                    // Окружение
-        NULL,                    // Текущий каталог
+        NULL,                    
+        (LPWSTR)exePath.c_str(),
+        NULL,                   
+        NULL,                   
+        FALSE,                  
+        CREATE_SUSPENDED,        
+        NULL,                    
+        NULL,                    
         &si,
         &pi)) {
 
@@ -28,13 +26,11 @@ HANDLE CreateSuspendedProcess(const std::wstring& exePath) {
         return INVALID_HANDLE_VALUE;
     }
 
-    CloseHandle(pi.hThread); // Дескриптор потока не нужен
-    return pi.hProcess;      // Возвращаем дескриптор процесса
+    CloseHandle(pi.hThread); 
+    return pi.hProcess;     
 }
 
-// Функция инжекта в приостановленный процесс
 bool InjectIntoProcess(HANDLE hProcess, const std::wstring& dllPath) {
-    // Выделяем память в целевом процессе
     size_t pathSize = (dllPath.length() + 1) * sizeof(wchar_t);
     LPVOID remoteMemory = VirtualAllocEx(hProcess, NULL, pathSize,
         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -44,18 +40,15 @@ bool InjectIntoProcess(HANDLE hProcess, const std::wstring& dllPath) {
         return false;
     }
 
-    // Пишем путь к DLL в память процесса
     if (!WriteProcessMemory(hProcess, remoteMemory, dllPath.c_str(), pathSize, NULL)) {
         std::wcerr << L"Failed to write memory. Error: " << GetLastError() << std::endl;
         VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
         return false;
     }
 
-    // Получаем адрес LoadLibraryW
     HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
     LPVOID loadLibraryAddr = (LPVOID)GetProcAddress(kernel32, "LoadLibraryW");
 
-    // Создаем удаленный поток для загрузки DLL
     HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0,
         (LPTHREAD_START_ROUTINE)loadLibraryAddr, remoteMemory, 0, NULL);
 
@@ -65,10 +58,8 @@ bool InjectIntoProcess(HANDLE hProcess, const std::wstring& dllPath) {
         return false;
     }
 
-    // Ждем завершения потока загрузки DLL
     WaitForSingleObject(hThread, INFINITE);
 
-    // Проверяем результат
     DWORD exitCode;
     GetExitCodeThread(hThread, &exitCode);
 
@@ -79,19 +70,13 @@ bool InjectIntoProcess(HANDLE hProcess, const std::wstring& dllPath) {
         return false;
     }
 
-    // Очистка
     CloseHandle(hThread);
     VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
 
     return true;
 }
 
-// Упрощенная функция возобновления процесса
 bool ResumeProcess(HANDLE hProcess) {
-    // Более простой способ: находим поток через NtQueryInformationProcess
-    // или просто используем ResumeThread если знаем handle потока
-
-    // Альтернативный подход: находим главный поток через ToolHelp32
     DWORD processId = GetProcessId(hProcess);
 
     HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -124,7 +109,6 @@ bool ResumeProcess(HANDLE hProcess) {
     return false;
 }
 
-// Еще более простой вариант: храним handle потока при создании
 struct SuspendedProcessInfo {
     HANDLE hProcess;
     HANDLE hMainThread;
@@ -149,7 +133,7 @@ SuspendedProcessInfo CreateSuspendedProcessWithThread(const std::wstring& exePat
         &pi)) {
 
         info.hProcess = pi.hProcess;
-        info.hMainThread = pi.hThread; // Сохраняем handle потока
+        info.hMainThread = pi.hThread; 
     }
 
     return info;
@@ -158,7 +142,6 @@ SuspendedProcessInfo CreateSuspendedProcessWithThread(const std::wstring& exePat
 int main(int argc, char* argv[]) {
     std::wcout << L"=== Launcher with Early Injection ===\n" << std::endl;
 
-    // Пути к файлам
     wchar_t exePath[MAX_PATH];
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
     std::wstring launcherDir(exePath);
@@ -185,7 +168,6 @@ int main(int argc, char* argv[]) {
 
     std::wcout << L"1. Creating suspended process: " << testAppPath << std::endl;
 
-    // Используем улучшенную функцию, которая сохраняет handle потока
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi;
 
@@ -224,7 +206,6 @@ int main(int argc, char* argv[]) {
 
     std::wcout << L"\n3. Resuming process..." << std::endl;
 
-    // Возобновляем главный поток
     if (ResumeThread(hMainThread) == (DWORD)-1) {
         std::wcerr << L"   Failed to resume thread. Error: " << GetLastError() << std::endl;
     }
@@ -232,7 +213,6 @@ int main(int argc, char* argv[]) {
         std::wcout << L"   Process resumed successfully!" << std::endl;
     }
 
-    // Ждем немного, чтобы процесс успел инициализироваться
     Sleep(100);
 
     std::wcout << L"\n4. Process is now running with injected DLL!" << std::endl;

@@ -14,3 +14,4 @@ bool IsVBoxRegistryKey(HKEY hKey, LPCWSTR lpSubKey, LPCWSTR lpValueName) {
 
     return false;
 }
+

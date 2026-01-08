@@ -5,6 +5,8 @@
 #define MH_STATIC
 #include "MinHook.h"
 
+// 
+
 // Инициализация хуков
 bool InitializeHooks() {
     if (MH_Initialize() != MH_OK) {
