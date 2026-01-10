@@ -1,6 +1,6 @@
 #include "registry_hooks.h"
-#include "../utils/log_utils.h"
-#include "../filters/vbox_filters.h"
+#include "log_utils.h"
+#include "vbox_filters.h"
 #include <string>
 #include <map>
 

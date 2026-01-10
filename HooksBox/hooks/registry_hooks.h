@@ -15,7 +15,4 @@ extern RegQueryValueExW_t original_RegQueryValueExW;
 LSTATUS WINAPI hook_RegOpenKeyExW(HKEY hKey, LPCWSTR lpSubKey, DWORD ulOptions, REGSAM samDesired, PHKEY phkResult);
 LSTATUS WINAPI hook_RegQueryValueExW(HKEY hKey, LPCWSTR lpValueName, LPDWORD lpReserved, LPDWORD lpType, LPBYTE lpData, LPDWORD lpcbData);
 
-// Инициализация хуков реестра
-bool InitializeRegistryHooks();
-
 #endif // REGISTRY_HOOKS_H

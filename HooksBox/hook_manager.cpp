@@ -1,6 +1,7 @@
 #include "hook_manager.h"
-#include "../utils/log_utils.h"
-#include "../hooks/registry_hooks.h"
+#include "log_utils.h"
+#include "registry_hooks.h"
+#include "file_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -14,6 +15,27 @@ bool InitializeHooks() {
         return false;
     }
 
+    if (!InitializeRegistryHooks()) {
+        return false;
+    }
+
+    if (!InitializeFileHooks()) {
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] Hooks installed successfully!");
+    return true;
+}
+
+// Очистка хуков
+void CleanupHooks() {
+    // Отключаем все хуки
+    MH_DisableHook(nullptr);
+    MH_Uninitialize();
+    DebugPrint("[HOOK_DLL] Hooks uninstalled");
+}
+
+bool InitializeRegistryHooks() {
     // Создаем хук для RegOpenKeyExW
     if (MH_CreateHook(&RegOpenKeyExW, &hook_RegOpenKeyExW,
         reinterpret_cast<void**>(&original_RegOpenKeyExW)) != MH_OK) {
@@ -28,21 +50,34 @@ bool InitializeHooks() {
         return false;
     }
 
-    // Включаем хуки
+    DebugPrint("[HOOK_DLL] Registry hooks created successfully");
+
     if (MH_EnableHook(&RegOpenKeyExW) != MH_OK ||
         MH_EnableHook(&RegQueryValueExW) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to enable hooks");
         return false;
     }
 
-    DebugPrint("[HOOK_DLL] Hooks installed successfully!");
+    DebugPrint("[HOOK_DLL] Registry hooks enable successfully");
+
     return true;
 }
 
-// Очистка хуков
-void CleanupHooks() {
-    // Отключаем все хуки
-    MH_DisableHook(nullptr);
-    MH_Uninitialize();
-    DebugPrint("[HOOK_DLL] Hooks uninstalled");
+bool InitializeFileHooks() {
+    // Создаем хук для GetFileAttributes
+    if (MH_CreateHook(&GetFileAttributesW, &hook_GetFileAttributesW,
+        reinterpret_cast<void**>(&original_GetFileAttributesW)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for GetFileAttributesW");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] File hooks created successfully");
+
+    if (MH_EnableHook(&GetFileAttributesW) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to enable hooks");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] File hooks enable successfully");
+    return true;
 }

@@ -3,10 +3,15 @@
 
 #include <windows.h>
 
+
 // Инициализация всех хуков
 bool InitializeHooks();
 
 // Очистка хуков
 void CleanupHooks();
+
+// 
+bool InitializeRegistryHooks();
+bool InitializeFileHooks();
 
 #endif // HOOK_MANAGER_H
