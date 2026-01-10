@@ -39,6 +39,9 @@
     <ClInclude Include="filters\vbox_filters.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="hooks\device_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="filters\vbox_filters.cpp">
@@ -62,10 +65,14 @@
     <ClCompile Include="hooks\file_hooks.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="hooks\device_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="hooksbox.def">
       <Filter>Исходные файлы</Filter>
     </None>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>

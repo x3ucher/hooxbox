@@ -11,7 +11,6 @@ GetFileAttributesW_t original_GetFileAttributesW = nullptr;
 LSTATUS WINAPI hook_GetFileAttributesW(
     LPCWSTR lpFileName
 ) {
-    DebugPrintW(L"[HOOK_DLL] GetFileAttributesW hook triggered!");
     wchar_t debugMsg[512];
     swprintf_s(debugMsg, L"[HOOK_DLL] GetFileAttributes called. FileName: %s", lpFileName ? lpFileName : L"null");
     DebugPrintW(debugMsg);

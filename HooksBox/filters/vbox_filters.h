@@ -7,5 +7,9 @@
 // Проверяет, является ли ключ реестра связанным с VirtualBox
 bool IsVBoxRegistryKey(HKEY hKey, LPCWSTR lpSubKey, LPCWSTR lpValueName = nullptr);
 bool IsVBoxFilePath(LPCWSTR lpFileName);
+bool IsVBoxDetectionAttempt(LPCWSTR lpFileName, DWORD dwDesiredAccess,
+    DWORD dwShareMode, DWORD dwCreationDisposition,
+    DWORD dwFlagsAndAttributes);
+
 
 #endif // VBOX_FILTERS_H

@@ -2,6 +2,7 @@
 #include "log_utils.h"
 #include "registry_hooks.h"
 #include "file_hooks.h"
+#include "device_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -20,6 +21,10 @@ bool InitializeHooks() {
     }
 
     if (!InitializeFileHooks()) {
+        return false;
+    }
+
+    if (!InitializeDeviceHooks()) {
         return false;
     }
 
@@ -74,6 +79,32 @@ bool InitializeFileHooks() {
     DebugPrint("[HOOK_DLL] File hooks created successfully");
 
     if (MH_EnableHook(&GetFileAttributesW) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to enable hooks");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] File hooks enable successfully");
+    return true;
+}
+
+bool InitializeDeviceHooks() {
+    // Создаем хук для CreateFileW
+    if (MH_CreateHook(&CreateFileW, &hook_CreateFileW,
+        reinterpret_cast<void**>(&original_CreateFileW)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for CreateFileW");
+        return false;
+    }
+
+    if (MH_CreateHook(&CreateFileA, &hook_CreateFileA,
+        reinterpret_cast<void**>(&original_CreateFileA)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for CreateFileW");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] Device hooks created successfully");
+
+    if (MH_EnableHook(&CreateFileW) != MH_OK ||
+        MH_EnableHook(&CreateFileA) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to enable hooks");
         return false;
     }

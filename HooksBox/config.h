@@ -47,4 +47,18 @@ static const wchar_t* VBOX_SYSTEM_FILES_PATHS[] = {
 
 static const int VBOX_SYSTEM_FILES_PATHS_COUNT = 14;
 
+static const wchar_t* VBOX_DEVICE_PATHS[] = {
+    L"VBoxMiniRdrDN",
+    L"VBoxGuest",
+    L"VBoxMiniRdDN", 
+    L"VBoxTrayIPC",
+    L"VBoxMouse",     
+    L"VBoxVideo",
+    L"VBoxSF",
+    L"VBoxDisp"
+};
+
+static const int VBOX_DEVICE_PATHS_COUNT = 8;
+
+
 #endif //CONFIG_H

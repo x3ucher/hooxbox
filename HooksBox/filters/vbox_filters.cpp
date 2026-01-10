@@ -1,4 +1,5 @@
 #include "vbox_filters.h"
+#include "log_utils.h"
 #include "../config.h"
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
@@ -29,6 +30,32 @@ bool IsVBoxFilePath(LPCWSTR lpFileName) {
     for (int i = 0; i < VBOX_SYSTEM_FILES_PATHS_COUNT; i++) {
         if (StrStrIW(lpFileName, VBOX_SYSTEM_FILES_PATHS[i]) != nullptr) {
             return true;
+        }
+    }
+
+    return false;
+}
+
+bool IsVBoxDetectionAttempt(LPCWSTR lpFileName, DWORD dwDesiredAccess,
+    DWORD dwShareMode, DWORD dwCreationDisposition,
+    DWORD dwFlagsAndAttributes) {
+    if (lpFileName == NULL) {
+        return false;
+    }
+
+    std::wstring filename(lpFileName);
+
+    for (int i = 0; i < VBOX_DEVICE_PATHS_COUNT; i++) {
+        if (filename.find(VBOX_DEVICE_PATHS[i]) != std::wstring::npos) {
+            DebugPrint("[HOOK_DLL] Found VBox device path in request");
+
+            if (dwDesiredAccess == GENERIC_READ &&
+                dwShareMode == FILE_SHARE_READ &&
+                dwCreationDisposition == OPEN_EXISTING &&
+                dwFlagsAndAttributes == FILE_ATTRIBUTE_NORMAL) {
+                DebugPrint("[HOOK_DLL] Matches detection pattern - blocking");
+                return true;
+            }
         }
     }
 
