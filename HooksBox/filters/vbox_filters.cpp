@@ -61,3 +61,10 @@ bool IsVBoxDetectionAttempt(LPCWSTR lpFileName, DWORD dwDesiredAccess,
 
     return false;
 }
+
+bool IsHiddenProcessW(const WCHAR* processName) {
+    return _wcsicmp(processName, L"vboxservice.exe") == 0 ||
+        _wcsicmp(processName, L"vboxtray.exe") == 0 ||
+        _wcsicmp(processName, L"VBoxService.exe") == 0 ||
+        _wcsicmp(processName, L"VBoxTray.exe") == 0;
+}

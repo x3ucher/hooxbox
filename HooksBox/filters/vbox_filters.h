@@ -10,6 +10,6 @@ bool IsVBoxFilePath(LPCWSTR lpFileName);
 bool IsVBoxDetectionAttempt(LPCWSTR lpFileName, DWORD dwDesiredAccess,
     DWORD dwShareMode, DWORD dwCreationDisposition,
     DWORD dwFlagsAndAttributes);
-
+bool IsHiddenProcessW(const WCHAR* processName);
 
 #endif // VBOX_FILTERS_H

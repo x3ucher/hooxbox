@@ -3,6 +3,7 @@
 #include "registry_hooks.h"
 #include "file_hooks.h"
 #include "device_hooks.h"
+#include "processes_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -25,6 +26,10 @@ bool InitializeHooks() {
     }
 
     if (!InitializeDeviceHooks()) {
+        return false;
+    }
+
+    if (!InitializeProcessHooks()) {
         return false;
     }
 
@@ -110,5 +115,44 @@ bool InitializeDeviceHooks() {
     }
 
     DebugPrint("[HOOK_DLL] File hooks enable successfully");
+    return true;
+}
+
+bool InitializeProcessHooks() {
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (!hKernel32) {
+        DebugPrint("[HOOK_DLL] Failed to get kernel32 handle");
+        return false;
+    }
+
+    FARPROC pProcess32FirstW = GetProcAddress(hKernel32, "Process32FirstW");
+    FARPROC pProcess32NextW = GetProcAddress(hKernel32, "Process32NextW");
+
+    if (!pProcess32FirstW || !pProcess32NextW) {
+        DebugPrint("[HOOK_DLL] Failed to get process functions addresses");
+        return false;
+    }
+
+    if (MH_CreateHook(pProcess32FirstW, &hook_Process32FirstW,
+        reinterpret_cast<void**>(&original_Process32FirstW)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for Process32FirstW");
+        return false;
+    }
+
+    if (MH_CreateHook(pProcess32NextW, &hook_Process32NextW,
+        reinterpret_cast<void**>(&original_Process32NextW)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for Process32Next");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] Process hooks created successfully");
+
+    if (MH_EnableHook(pProcess32FirstW) != MH_OK ||
+        MH_EnableHook(pProcess32NextW) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to enable process hooks");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] Process hooks enabled successfully");
     return true;
 }

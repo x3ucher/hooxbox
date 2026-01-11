@@ -14,5 +14,6 @@ void CleanupHooks();
 bool InitializeRegistryHooks();
 bool InitializeFileHooks();
 bool InitializeDeviceHooks();
+bool InitializeProcessHooks();
 
 #endif // HOOK_MANAGER_H
