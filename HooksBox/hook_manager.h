@@ -16,5 +16,6 @@ bool InitializeFileHooks();
 bool InitializeDeviceHooks();
 bool InitializeProcessHooks();
 bool InitializeWndHooks();
+bool InitializeNetworkHooks();
 
 #endif // HOOK_MANAGER_H

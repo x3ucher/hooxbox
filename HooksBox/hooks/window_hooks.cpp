@@ -1,11 +1,9 @@
-#include "system_hooks.h"
+#include "window_hooks.h"
 #include "log_utils.h"
 #include "vbox_filters.h"
 
-WNetGetProviderNameW_t original_WNetGetProviderNameW = nullptr;
 FindWindowW_t original_FindWindowW = nullptr;
 FindWindowExW_t original_FindWindowExW = nullptr;
-GetAdaptersInfo_t original_GetAdaptersInfo = nullptr;
 
 HWND WINAPI hook_FindWindowW(LPCWSTR lpClassName, LPCWSTR lpWindowName)
 {

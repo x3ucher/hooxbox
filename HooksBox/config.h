@@ -60,5 +60,7 @@ static const wchar_t* VBOX_DEVICE_PATHS[] = {
 
 static const int VBOX_DEVICE_PATHS_COUNT = 8;
 
+const std::wstring VIRTUALBOX_PROVIDER_NAME = L"VirtualBox Shared Folders";
+
 
 #endif //CONFIG_H

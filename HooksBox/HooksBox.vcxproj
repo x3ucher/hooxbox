@@ -138,12 +138,12 @@
     <ClInclude Include="filter_engine.h" />
     <ClInclude Include="hooks\device_hooks.h" />
     <ClInclude Include="hooks\file_hooks.h" />
+    <ClInclude Include="hooks\network_hooks.h" />
     <ClInclude Include="hooks\processes_hooks.h" />
     <ClInclude Include="hooks\registry_hooks.h" />
     <ClInclude Include="hooks\window_hooks.h" />
     <ClInclude Include="hook_dll_main.h" />
     <ClInclude Include="hook_manager.h" />
-    <ClInclude Include="system_hooks.h" />
     <ClInclude Include="utils\log_utils.h" />
   </ItemGroup>
   <ItemGroup>
@@ -151,12 +151,12 @@
     <ClCompile Include="filter_engine.cpp" />
     <ClCompile Include="hooks\device_hooks.cpp" />
     <ClCompile Include="hooks\file_hooks.cpp" />
+    <ClCompile Include="hooks\network_hooks.cpp" />
     <ClCompile Include="hooks\processes_hooks.cpp" />
     <ClCompile Include="hooks\registry_hooks.cpp" />
     <ClCompile Include="hooks\window_hooks.cpp" />
     <ClCompile Include="hook_dll_main.cpp" />
     <ClCompile Include="hook_manager.cpp" />
-    <ClCompile Include="system_hooks.cpp" />
     <ClCompile Include="utils\log_utils.cpp" />
   </ItemGroup>
   <ItemGroup>

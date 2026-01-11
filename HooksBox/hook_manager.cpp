@@ -4,7 +4,8 @@
 #include "file_hooks.h"
 #include "device_hooks.h"
 #include "processes_hooks.h"
-#include "system_hooks.h"
+#include "window_hooks.h"
+#include "network_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -40,6 +41,11 @@ bool InitializeHooks() {
 
     if (!InitializeWndHooks()) {
         DebugPrint("[Window]");
+        return false;
+    }
+
+    if (!InitializeNetworkHooks()) {
+        DebugPrint("[Network]");
         return false;
     }
 
@@ -189,5 +195,38 @@ bool InitializeWndHooks() {
     }
 
     DebugPrint("[HOOK_DLL] Window hooks enabled successfully");
+    return true;
+}
+
+bool InitializeNetworkHooks() {
+    HMODULE hMpr = GetModuleHandleW(L"mpr.dll");
+    if (!hMpr) {
+        hMpr = LoadLibraryW(L"mpr.dll");
+        if (!hMpr) {
+            DebugPrint("[NETWORK_HOOKS] Failed to get mpr.dll handle");
+            return false;
+        }
+    }
+
+    FARPROC pWNetGetProviderNameW = GetProcAddress(hMpr, "WNetGetProviderNameW");
+    if (!pWNetGetProviderNameW) {
+        DebugPrint("[NETWORK_HOOKS] Failed to get WNetGetProviderNameW address");
+        return false;
+    }
+
+    if (MH_CreateHook(pWNetGetProviderNameW, &hook_WNetGetProviderNameW,
+        reinterpret_cast<void**>(&original_WNetGetProviderNameW)) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to create hook for WNetGetProviderNameW");
+        return false;
+    }
+
+    DebugPrint("[NETWORK_HOOKS] WNetGetProviderNameW hook created successfully");
+
+    if (MH_EnableHook(pWNetGetProviderNameW) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to enable WNetGetProviderNameW hook");
+        return false;
+    }
+
+    DebugPrint("[NETWORK_HOOKS] WNetGetProviderNameW hook enabled successfully");
     return true;
 }
