@@ -15,5 +15,6 @@ bool InitializeRegistryHooks();
 bool InitializeFileHooks();
 bool InitializeDeviceHooks();
 bool InitializeProcessHooks();
+bool InitializeWndHooks();
 
 #endif // HOOK_MANAGER_H

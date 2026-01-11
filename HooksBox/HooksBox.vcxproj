@@ -142,6 +142,7 @@
     <ClInclude Include="hooks\registry_hooks.h" />
     <ClInclude Include="hook_dll_main.h" />
     <ClInclude Include="hook_manager.h" />
+    <ClInclude Include="system_hooks.h" />
     <ClInclude Include="utils\log_utils.h" />
   </ItemGroup>
   <ItemGroup>
@@ -153,6 +154,7 @@
     <ClCompile Include="hooks\registry_hooks.cpp" />
     <ClCompile Include="hook_dll_main.cpp" />
     <ClCompile Include="hook_manager.cpp" />
+    <ClCompile Include="system_hooks.cpp" />
     <ClCompile Include="utils\log_utils.cpp" />
   </ItemGroup>
   <ItemGroup>

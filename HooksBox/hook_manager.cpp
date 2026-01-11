@@ -4,6 +4,7 @@
 #include "file_hooks.h"
 #include "device_hooks.h"
 #include "processes_hooks.h"
+#include "system_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -18,18 +19,27 @@ bool InitializeHooks() {
     }
 
     if (!InitializeRegistryHooks()) {
+        DebugPrint("[Registry]");
         return false;
     }
 
     if (!InitializeFileHooks()) {
+        DebugPrint("[File]");
         return false;
     }
 
     if (!InitializeDeviceHooks()) {
+        DebugPrint("[Device]");
         return false;
     }
 
     if (!InitializeProcessHooks()) {
+        DebugPrint("[Process]");
+        return false;
+    }
+
+    if (!InitializeWndHooks()) {
+        DebugPrint("[Window]");
         return false;
     }
 
@@ -154,5 +164,30 @@ bool InitializeProcessHooks() {
     }
 
     DebugPrint("[HOOK_DLL] Process hooks enabled successfully");
+    return true;
+}
+
+bool InitializeWndHooks() {
+    if (MH_CreateHook(&FindWindowW, &hook_FindWindowW,
+        reinterpret_cast<void**>(&original_FindWindowW)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for FindWindowW");
+        return false;
+    }
+
+    if (MH_CreateHook(&FindWindowExW, &hook_FindWindowExW,
+        reinterpret_cast<void**>(&original_FindWindowExW)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for FindWindowExW");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] Window hooks created successfully");
+
+    if (MH_EnableHook(&FindWindowW) != MH_OK ||
+        MH_EnableHook(&FindWindowExW) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to enable window hooks");
+        return false;
+    }
+
+    DebugPrint("[HOOK_DLL] Window hooks enabled successfully");
     return true;
 }
