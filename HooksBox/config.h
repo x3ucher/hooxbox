@@ -1,9 +1,6 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// MAC-адрес VirtualBox
-#define VBOX_MAC_PREFIX "08:00:27"
-
 // Конфигурационные константы для фильтрации VirtualBox
 static const wchar_t* VBOX_REGISTRY_PATHS[] = {
     L"VBoxGuest",

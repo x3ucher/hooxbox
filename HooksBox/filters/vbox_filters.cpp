@@ -68,3 +68,15 @@ bool IsHiddenProcessW(const WCHAR* processName) {
         _wcsicmp(processName, L"VBoxService.exe") == 0 ||
         _wcsicmp(processName, L"VBoxTray.exe") == 0;
 }
+
+bool IsVirtualBoxMAC(const BYTE* mac, DWORD length) {
+    if (length < 6) return false;
+    return mac[0] == 0x08 && mac[1] == 0x00 && mac[2] == 0x27;
+}
+
+void MaskMACAddress(BYTE* mac, DWORD length) {
+    if (length < 6) return;
+    mac[0] = 0x00;
+    mac[1] = 0x00;
+    mac[2] = 0x00;
+}
