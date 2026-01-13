@@ -5,10 +5,12 @@
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "mpr.lib")
 
 
 WNetGetProviderNameW_t original_WNetGetProviderNameW = nullptr;
 GetAdaptersInfo_t original_GetAdaptersInfo = nullptr;
+GetAdaptersAddresses_t original_GetAdaptersAddresses = nullptr;
 
 DWORD WINAPI hook_WNetGetProviderNameW(DWORD dwNetType, LPWSTR lpProviderName, LPDWORD lpBufferSize) {
     DWORD result = original_WNetGetProviderNameW(dwNetType, lpProviderName, lpBufferSize);
@@ -21,7 +23,7 @@ DWORD WINAPI hook_WNetGetProviderNameW(DWORD dwNetType, LPWSTR lpProviderName, L
     return result;
 }
 
-IPHLPAPI_DLL_LINKAGE ULONG WINAPI hook_GetAdaptersInfo(
+ULONG WINAPI hook_GetAdaptersInfo(
     PIP_ADAPTER_INFO pAdapterInfo,
     PULONG pOutBufLen
 ) {
@@ -39,7 +41,7 @@ IPHLPAPI_DLL_LINKAGE ULONG WINAPI hook_GetAdaptersInfo(
         return result;
     }
 
-    PIP_ADAPTER_INFO current = pAdapterInfo;
+    PIP_ADAPTER_INFO current = (PIP_ADAPTER_INFO)pAdapterInfo;
     PIP_ADAPTER_INFO prev = nullptr;
 
     while (current) {
@@ -51,7 +53,7 @@ IPHLPAPI_DLL_LINKAGE ULONG WINAPI hook_GetAdaptersInfo(
             if (description.find("virtualbox") != std::string::npos ||
                 description.find("vbox") != std::string::npos) {
                 strncpy_s(current->Description, sizeof(current->Description),
-                    "Microsoft Network Adapter", _TRUNCATE);
+                    "Realtek PCIe GbE Family Controller", _TRUNCATE);
             }
         }
         current = current->Next;
@@ -59,7 +61,7 @@ IPHLPAPI_DLL_LINKAGE ULONG WINAPI hook_GetAdaptersInfo(
     return result;
 }
 
-IPHLPAPI_DLL_LINKAGE ULONG WINAPI hook_GetAdaptersAddresses(
+ULONG WINAPI hook_GetAdaptersAddresses(
     ULONG Family,
     ULONG Flags,
     PVOID Reserved,
@@ -87,27 +89,26 @@ IPHLPAPI_DLL_LINKAGE ULONG WINAPI hook_GetAdaptersAddresses(
     while (current) {
         if (IsVirtualBoxMAC(current->PhysicalAddress, current->PhysicalAddressLength)) {
             MaskMACAddress(current->PhysicalAddress, current->PhysicalAddressLength);
-            if (current->FriendlyName) {
-                std::string friendlyName(current->FriendlyName);
-                std::transform(friendlyName.begin(), friendlyName.end(), friendlyName.begin(), ::tolower);
 
-                if (friendlyName.find("virtualbox") != std::string::npos ||
-                    friendlyName.find("vbox") != std::string::npos) {
-                    if (Flags & GAA_FLAG_INCLUDE_PREFIX) {
-                        wcscpy_s(current->FriendlyName, wcslen(current->FriendlyName) + 1,
-                            L"Microsoft Hyper-V Virtual Ethernet Adapter");
-                    }
+            if (current->FriendlyName) {
+                std::wstring friendlyName(current->FriendlyName);
+                std::transform(friendlyName.begin(), friendlyName.end(), friendlyName.begin(), ::towlower);
+
+                if (friendlyName.find(L"virtualbox") != std::wstring::npos ||
+                    friendlyName.find(L"vbox") != std::wstring::npos) {
+                    wcscpy_s(current->FriendlyName, wcslen(current->FriendlyName) + 1,
+                        L"Ethernet");
                 }
             }
 
             if (current->Description) {
-                std::string description(current->Description);
-                std::transform(description.begin(), description.end(), description.begin(), ::tolower);
+                std::wstring description(current->Description);
+                std::transform(description.begin(), description.end(), description.begin(), ::towlower);
 
-                if (description.find("virtualbox") != std::string::npos ||
-                    description.find("vbox") != std::string::npos) {
-                    strcpy_s(current->Description, strlen(current->Description) + 1,
-                        "Microsoft Hyper-V Virtual Ethernet Adapter");
+                if (description.find(L"virtualbox") != std::wstring::npos ||
+                    description.find(L"vbox") != std::wstring::npos) {
+                    wcscpy_s(current->Description, wcslen(current->Description) + 1,
+                        L"Realtek PCIe GbE Family Controller");
                 }
             }
 
@@ -118,18 +119,18 @@ IPHLPAPI_DLL_LINKAGE ULONG WINAPI hook_GetAdaptersAddresses(
                 if (adapterName.find("virtualbox") != std::string::npos ||
                     adapterName.find("vbox") != std::string::npos) {
                     strcpy_s(current->AdapterName, strlen(current->AdapterName) + 1,
-                        "Hyper-V Virtual Ethernet Adapter");
+                        "Realtek Controller");
                 }
             }
         }
 
         if (current->DnsSuffix) {
-            std::string dnsSuffix(current->DnsSuffix);
-            std::transform(dnsSuffix.begin(), dnsSuffix.end(), dnsSuffix.begin(), ::tolower);
+            std::wstring dnsSuffix(current->DnsSuffix);
+            std::transform(dnsSuffix.begin(), dnsSuffix.end(), dnsSuffix.begin(), ::towlower);
 
-            if (dnsSuffix.find("virtualbox") != std::string::npos ||
-                dnsSuffix.find("vbox") != std::string::npos) {
-                strcpy_s(current->DnsSuffix, strlen(current->DnsSuffix) + 1, "");
+            if (dnsSuffix.find(L"virtualbox") != std::wstring::npos ||
+                dnsSuffix.find(L"vbox") != std::wstring::npos) {
+                wcscpy_s(current->DnsSuffix, wcslen(current->DnsSuffix) + 1, L"");
             }
         }
 

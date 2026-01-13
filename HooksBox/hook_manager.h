@@ -17,5 +17,6 @@ bool InitializeDeviceHooks();
 bool InitializeProcessHooks();
 bool InitializeWndHooks();
 bool InitializeNetworkHooks();
+bool InitializeMacAddresHooks();
 
 #endif // HOOK_MANAGER_H

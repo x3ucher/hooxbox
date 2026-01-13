@@ -49,6 +49,11 @@ bool InitializeHooks() {
         return false;
     }
 
+    if (!InitializeMacAddresHooks()) {
+        DebugPrint("[Network]");
+        return false;
+    }
+
     DebugPrint("[HOOK_DLL] Hooks installed successfully!");
     return true;
 }
@@ -62,14 +67,12 @@ void CleanupHooks() {
 }
 
 bool InitializeRegistryHooks() {
-    // Создаем хук для RegOpenKeyExW
     if (MH_CreateHook(&RegOpenKeyExW, &hook_RegOpenKeyExW,
         reinterpret_cast<void**>(&original_RegOpenKeyExW)) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to create hook for RegOpenKeyExW");
         return false;
     }
 
-    // Создаем хук для RegQueryValueExW
     if (MH_CreateHook(&RegQueryValueExW, &hook_RegQueryValueExW,
         reinterpret_cast<void**>(&original_RegQueryValueExW)) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to create hook for RegQueryValueExW");
@@ -90,7 +93,6 @@ bool InitializeRegistryHooks() {
 }
 
 bool InitializeFileHooks() {
-    // Создаем хук для GetFileAttributes
     if (MH_CreateHook(&GetFileAttributesW, &hook_GetFileAttributesW,
         reinterpret_cast<void**>(&original_GetFileAttributesW)) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to create hook for GetFileAttributesW");
@@ -109,7 +111,6 @@ bool InitializeFileHooks() {
 }
 
 bool InitializeDeviceHooks() {
-    // Создаем хук для CreateFileW
     if (MH_CreateHook(&CreateFileW, &hook_CreateFileW,
         reinterpret_cast<void**>(&original_CreateFileW)) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to create hook for CreateFileW");
@@ -229,4 +230,55 @@ bool InitializeNetworkHooks() {
 
     DebugPrint("[NETWORK_HOOKS] WNetGetProviderNameW hook enabled successfully");
     return true;
+}
+
+bool InitializeMacAddresHooks() {
+    HMODULE hIphlpapi = GetModuleHandleW(L"iphlpapi.dll");
+    if (!hIphlpapi) {
+        hIphlpapi = LoadLibraryW(L"iphlpapi.dll");
+        if (!hIphlpapi) {
+            DebugPrint("[NETWORK_HOOKS] Failed to get iphlpapi.dll handle");
+            return false;
+        }
+    }
+
+    FARPROC pGetAdaptersInfo = GetProcAddress(hIphlpapi, "GetAdaptersInfo");
+    if (!pGetAdaptersInfo) {
+        DebugPrint("[NETWORK_HOOKS] Failed to get GetAdaptersInfo address");
+        return false;
+    }
+
+    if (MH_CreateHook(pGetAdaptersInfo, &hook_GetAdaptersInfo,
+        reinterpret_cast<void**>(&original_GetAdaptersInfo)) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to create hook for GetAdaptersInfo");
+        return false;
+    }
+
+    if (MH_EnableHook(pGetAdaptersInfo) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to enable GetAdaptersInfo hook");
+        return false;
+    }
+
+    DebugPrint("[NETWORK_HOOKS] GetAdaptersInfo hook created and enabled successfully");
+
+    FARPROC pGetAdaptersAddresses = GetProcAddress(hIphlpapi, "GetAdaptersAddresses");
+    if (!pGetAdaptersAddresses) {
+        DebugPrint("[NETWORK_HOOKS] Failed to get GetAdaptersAddresses address");
+        return false;
+    }
+
+    if (MH_CreateHook(pGetAdaptersAddresses, &hook_GetAdaptersAddresses,
+        reinterpret_cast<void**>(&original_GetAdaptersAddresses)) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to create hook for GetAdaptersAddresses");
+        return false;
+    }
+
+    if (MH_EnableHook(pGetAdaptersAddresses) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to enable GetAdaptersAddresses hook");
+        return false;
+    }
+
+    DebugPrint("[NETWORK_HOOKS] GetAdaptersAddresses hook created and enabled successfully");
+    return true;
+
 }
