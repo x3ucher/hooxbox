@@ -138,6 +138,7 @@
     <ClInclude Include="filter_engine.h" />
     <ClInclude Include="hooks\device_hooks.h" />
     <ClInclude Include="hooks\file_hooks.h" />
+    <ClInclude Include="hooks\firmwaretable_hooks.h" />
     <ClInclude Include="hooks\network_hooks.h" />
     <ClInclude Include="hooks\processes_hooks.h" />
     <ClInclude Include="hooks\registry_hooks.h" />
@@ -151,6 +152,7 @@
     <ClCompile Include="filter_engine.cpp" />
     <ClCompile Include="hooks\device_hooks.cpp" />
     <ClCompile Include="hooks\file_hooks.cpp" />
+    <ClCompile Include="hooks\firmwaretable_hooks.cpp" />
     <ClCompile Include="hooks\network_hooks.cpp" />
     <ClCompile Include="hooks\processes_hooks.cpp" />
     <ClCompile Include="hooks\registry_hooks.cpp" />

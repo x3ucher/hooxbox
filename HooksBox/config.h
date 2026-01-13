@@ -59,5 +59,19 @@ static const int VBOX_DEVICE_PATHS_COUNT = 8;
 
 const std::wstring VIRTUALBOX_PROVIDER_NAME = L"VirtualBox Shared Folders";
 
+#pragma pack(push, 1)
+struct FakeAcpiTable {
+    char signature[4] = { 'R', 'S', 'D', ' ' }; // или любая другая валидная сигнатура
+    DWORD length = 36;
+    BYTE revision = 0;
+    BYTE checksum = 0;
+    char oemid[6] = { 'A', 'W', 'A', 'R', 'E', ' ' };
+    char oemtableid[8] = { 'G', 'E', 'N', 'U', 'I', 'N', 'E', ' ' };
+    DWORD oemrevision = 1;
+    DWORD creatorid = 0;
+    DWORD creatorrevision = 0;
+    BYTE data[4] = { 0, 0, 0, 0 };
+};
+#pragma pack(pop)
 
 #endif //CONFIG_H

@@ -6,6 +6,7 @@
 #include "processes_hooks.h"
 #include "window_hooks.h"
 #include "network_hooks.h"
+#include "firmwaretable_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -50,7 +51,12 @@ bool InitializeHooks() {
     }
 
     if (!InitializeMacAddresHooks()) {
-        DebugPrint("[Network]");
+        DebugPrint("[MAC Addres]");
+        return false;
+    }
+
+    if (!InitializeFirmwareTableHooks()) {
+        DebugPrint("[Firmware Table]");
         return false;
     }
 
@@ -281,4 +287,48 @@ bool InitializeMacAddresHooks() {
     DebugPrint("[NETWORK_HOOKS] GetAdaptersAddresses hook created and enabled successfully");
     return true;
 
+}
+
+bool InitializeFirmwareTableHooks() {
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (!hKernel32) {
+        DebugPrint("[FIRMWARE_TABLE_HOOK] Failed to get kernel32 handle");
+        return false;
+    }
+
+    FARPROC pGetSystemFirmwareTable = GetProcAddress(hKernel32, "GetSystemFirmwareTable");
+    FARPROC pEnumSystemFirmwareTables = GetProcAddress(hKernel32, "EnumSystemFirmwareTables");
+
+    if (!pGetSystemFirmwareTable || !pEnumSystemFirmwareTables) {
+        DebugPrint("[FIRMWARE_TABLE_HOOK] Failed to get firmware table functions addresses");
+        return false;
+    }
+
+    if (MH_CreateHook(pGetSystemFirmwareTable, &hook_GetSystemFirmwareTable,
+        reinterpret_cast<void**>(&original_GetSystemFirmwareTable)) != MH_OK) {
+        DebugPrint("[FIRMWARE_TABLE_HOOK] Failed to create hook for GetSystemFirmwareTable");
+        return false;
+    }
+
+    if (MH_EnableHook(pGetSystemFirmwareTable) != MH_OK) {
+        DebugPrint("[FIRMWARE_TABLE_HOOK] Failed to enable GetSystemFirmwareTable hook");
+        return false;
+    }
+
+    DebugPrint("[FIRMWARE_TABLE_HOOK] GetSystemFirmwareTable hook created and enabled successfully");
+
+    if (MH_CreateHook(pEnumSystemFirmwareTables, &hook_EnumSystemFirmwareTables,
+        reinterpret_cast<void**>(&original_EnumSystemFirmwareTables)) != MH_OK) {
+        DebugPrint("[FIRMWARE_TABLE_HOOK] Failed to create hook for EnumSystemFirmwareTables");
+        return false;
+    }
+
+    if (MH_EnableHook(pEnumSystemFirmwareTables) != MH_OK) {
+        DebugPrint("[FIRMWARE_TABLE_HOOK] Failed to enable EnumSystemFirmwareTables hook");
+        return false;
+    }
+
+    DebugPrint("[FIRMWARE_TABLE_HOOK] EnumSystemFirmwareTables hook created and enabled successfully");
+
+    return true; 
 }
