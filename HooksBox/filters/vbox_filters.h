@@ -13,5 +13,8 @@ bool IsVBoxDetectionAttempt(LPCWSTR lpFileName, DWORD dwDesiredAccess,
 bool IsHiddenProcessW(const WCHAR* processName);
 bool IsVirtualBoxMAC(const BYTE* mac, DWORD length);
 void MaskMACAddress(BYTE* mac, DWORD length);
+bool ContainsVirtualBoxString(const BYTE* data, DWORD size);
+void FilterVirtualBoxStrings(BYTE* data, DWORD size);
+
 
 #endif // VBOX_FILTERS_H

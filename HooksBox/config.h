@@ -61,7 +61,7 @@ const std::wstring VIRTUALBOX_PROVIDER_NAME = L"VirtualBox Shared Folders";
 
 #pragma pack(push, 1)
 struct FakeAcpiTable {
-    char signature[4] = { 'R', 'S', 'D', ' ' }; // или любая другая валидная сигнатура
+    char signature[4] = { 'R', 'S', 'D', ' ' };
     DWORD length = 36;
     BYTE revision = 0;
     BYTE checksum = 0;
@@ -71,6 +71,23 @@ struct FakeAcpiTable {
     DWORD creatorid = 0;
     DWORD creatorrevision = 0;
     BYTE data[4] = { 0, 0, 0, 0 };
+};
+
+struct FakeSmbiosTable {
+    BYTE anchorString[4] = { '_', 'S', 'M', '_' };
+    BYTE entryPointLength = 0x1F;
+    BYTE majorVersion = 2;
+    BYTE minorVersion = 7;
+    WORD maxStructureSize = 0;
+    BYTE entryPointRevision = 0;
+    BYTE formattedArea[5] = { 0 };
+    BYTE intermediateAnchorString[5] = { '_', 'D', 'M', 'I', '_' };
+    BYTE intermediateChecksum = 0;
+    WORD tableLength = 0;
+    DWORD tableAddress = 0;
+    WORD numberOfStructures = 0;
+    BYTE smbiosBCDRevision = 0;
+    BYTE padding[15] = { 0 };
 };
 #pragma pack(pop)
 

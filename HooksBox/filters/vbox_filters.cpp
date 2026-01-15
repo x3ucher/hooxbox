@@ -80,3 +80,60 @@ void MaskMACAddress(BYTE* mac, DWORD length) {
     mac[1] = 0x00;
     mac[2] = 0x00;
 }
+
+bool ContainsVirtualBoxString(const BYTE* data, DWORD size) {
+    if (!data || size == 0) return false;
+
+    static const char* vboxStrings[] = {
+        "VirtualBox",
+        "vbox",
+        "VBOX",
+        "Oracle VM VirtualBox",
+        "Virtual Machine",
+        "VMware",
+        "QEMU",
+        "Xen"
+    };
+
+    for (const auto* vboxStr : vboxStrings) {
+        size_t strLen = strlen(vboxStr);
+        for (DWORD i = 0; i <= size - strLen; i++) {
+            if (strncmp(reinterpret_cast<const char*>(&data[i]), vboxStr, strLen) == 0) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void FilterVirtualBoxStrings(BYTE* data, DWORD size) {
+    if (!data || size == 0) return;
+
+    static const std::pair<const char*, const char*> replacements[] = {
+        {"VirtualBox", "GenuineIntel"},
+        {"vbox", "intel"},
+        {"VBOX", "INTEL"},
+        {"Oracle VM VirtualBox", "Intel Corporation"},
+        {"Virtual Machine", "Physical Machine"},
+        {"VMware", "Intel"},
+        {"QEMU", "Intel"},
+        {"Xen", "Intel"}
+    };
+
+    for (const auto& [search, replace] : replacements) {
+        size_t searchLen = strlen(search);
+        size_t replaceLen = strlen(replace);
+
+        for (DWORD i = 0; i <= size - searchLen; i++) {
+            if (strncmp(reinterpret_cast<char*>(&data[i]), search, searchLen) == 0) {
+                if (i + replaceLen <= size) {
+                    memcpy(&data[i], replace, replaceLen);
+                    if (replaceLen < searchLen) {
+                        memset(&data[i + replaceLen], ' ', searchLen - replaceLen);
+                    }
+                }
+            }
+        }
+    }
+}
