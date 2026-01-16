@@ -14,6 +14,18 @@ static const wchar_t* VBOX_REGISTRY_PATHS[] = {
 
 static const int VBOX_REGISTRY_PATHS_COUNT = 7;
 
+static const wchar_t* VBOX_DISK_ENUM_CHECKS[] = {
+    L"qemu",
+    L"virtio",
+    L"vmware",
+    L"vbox",
+    L"xen",
+    L"vmw",
+    L"virtual"
+};
+
+static const int VBOX_DISK_ENUM_CHECKS_COUNT = 7;
+
 // VirtualBox driver files in \\WINDOWS\\system32\\drivers
 static const wchar_t* VBOX_DRIVERS_PATHS[] = {
     L"C:\\WINDOWS\\system32\\drivers\\VBoxMouse.sys",

@@ -4,13 +4,13 @@
 void DebugPrint(const char* text) {
     OutputDebugStringA(text);
     OutputDebugStringA("\n");
-    std::cout << text << std::endl;
+    //std::cout << text << std::endl;
 }
 
 void DebugPrintW(const wchar_t* text) {
     OutputDebugStringW(text);
     OutputDebugStringW(L"\n");
-    std::cout << text << std::endl;
+    //std::cout << text << std::endl;
 }
 
 bool EqualsCaseInsensitive(const std::wstring& str1, const std::wstring& str2) {

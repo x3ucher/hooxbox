@@ -4,12 +4,9 @@
 #include <string>
 #include <map>
 
-// Инициализация указателей на оригинальные функции
 RegOpenKeyExW_t original_RegOpenKeyExW = nullptr;
 RegQueryValueExW_t original_RegQueryValueExW = nullptr;
 
-// Хук для RegOpenKeyExW
-// exists_regkey
 LSTATUS WINAPI hook_RegOpenKeyExW(
     HKEY hKey,
     LPCWSTR lpSubKey,
@@ -29,7 +26,6 @@ LSTATUS WINAPI hook_RegOpenKeyExW(
     return original_RegOpenKeyExW(hKey, lpSubKey, ulOptions, samDesired, phkResult);
 }
 
-// Хук для RegQueryValueExW
 LSTATUS WINAPI hook_RegQueryValueExW(
     HKEY hKey,
     LPCWSTR lpValueName,
@@ -49,9 +45,61 @@ LSTATUS WINAPI hook_RegQueryValueExW(
     LSTATUS result = original_RegQueryValueExW(hKey, lpValueName, lpReserved, &tempType, tempBuffer, &tempSize);
 
     if (result == ERROR_SUCCESS && lpValueName) {
-        wchar_t* currentValue = (wchar_t*)tempBuffer;
-        if (wcscmp(lpValueName, L"SystemBiosVersion") == 0) {
-            if (wcsstr(currentValue, L"VBOX") != NULL) {
+        if (tempType == REG_SZ || tempType == REG_EXPAND_SZ || tempType == REG_MULTI_SZ) {
+            wchar_t* currentValue = (wchar_t*)tempBuffer;
+            bool isNumericValue = true;
+            for (int i = 0; lpValueName[i]; i++) {
+                if (!iswdigit(lpValueName[i])) {
+                    isNumericValue = false;
+                    break;
+                }
+            }
+
+            if (isNumericValue && _wcsicmp(lpValueName, L"Count") != 0) {
+                const wchar_t* szChecks[] = {
+                    L"qemu",
+                    L"virtio",
+                    L"vmware",
+                    L"vbox",
+                    L"xen",
+                    L"vmw",
+                    L"virtual"
+                };
+                const int szChecksLength = sizeof(szChecks) / sizeof(szChecks[0]);
+
+                std::wstring currentStr(currentValue);
+                std::wstring lowerValue = currentStr;
+                std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::towlower);
+
+                bool found = false;
+                for (int i = 0; i < szChecksLength; i++) {
+                    if (lowerValue.find(szChecks[i]) != std::wstring::npos) {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (found) {
+                    const wchar_t* fakeValue = L"ATA Device";
+                    DWORD newSize = static_cast<DWORD>((wcslen(fakeValue) + 1) * sizeof(wchar_t));
+
+                    if (lpData && lpcbData && *lpcbData >= newSize) {
+                        wcscpy_s((wchar_t*)lpData, *lpcbData / sizeof(wchar_t), fakeValue);
+                        if (lpType) *lpType = tempType;
+                        if (lpcbData) *lpcbData = newSize;
+                        DebugPrintW(L"[HOOK_DLL] Masked Disk\\Enum value!");
+                        return ERROR_SUCCESS;
+                    }
+                    else if (lpcbData) {
+                        *lpcbData = newSize;
+                        return ERROR_MORE_DATA;
+                    }
+                }
+            }
+        }
+
+        if (_wcsicmp(lpValueName, L"SystemBiosVersion") == 0) {
+            if (wcsstr((wchar_t*)tempBuffer, L"VBOX") != NULL) {
                 const wchar_t* fakeValue = L"ALASKA - 1072009";
                 DWORD newSize = static_cast<DWORD>((wcslen(fakeValue) + 1) * sizeof(wchar_t));
                 if (lpData && lpcbData && *lpcbData >= newSize) {
@@ -67,7 +115,7 @@ LSTATUS WINAPI hook_RegQueryValueExW(
             }
         }
         else if (wcscmp(lpValueName, L"Identifier") == 0) {
-            if (wcsstr(currentValue, L"VBOX") != NULL) {
+            if (wcsstr((wchar_t*)tempBuffer, L"VBOX") != NULL) {
                 const wchar_t* fakeValue = L"ATA HARDDISK";
                 DWORD newSize = static_cast<DWORD>((wcslen(fakeValue) + 1) * sizeof(wchar_t));
 
@@ -84,13 +132,13 @@ LSTATUS WINAPI hook_RegQueryValueExW(
             }
         }
         else if (wcscmp(lpValueName, L"VideoBiosVersion") == 0) {
-            if (wcsstr(currentValue, L"VIRTUALBOX") != NULL ||
-                wcsstr(currentValue, L"VirtualBox") != NULL) {
+            if (wcsstr((wchar_t*)tempBuffer, L"VIRTUALBOX") != NULL ||
+                wcsstr((wchar_t*)tempBuffer, L"VirtualBox") != NULL) {
                 return ERROR_FILE_NOT_FOUND; 
             }
         }
         else if (wcscmp(lpValueName, L"SystemBiosDate") == 0) {
-            if (currentValue && wcscmp(currentValue, L"06/23/99") == 0) {
+            if ((wchar_t*)tempBuffer && wcscmp((wchar_t*)tempBuffer, L"06/23/99") == 0) {
                 return ERROR_FILE_NOT_FOUND; 
             }
         }
