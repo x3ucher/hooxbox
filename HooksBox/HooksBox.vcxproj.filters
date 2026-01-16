@@ -54,6 +54,12 @@
     <ClInclude Include="hooks\firmwaretable_hooks.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="hooks\hypervobj_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\system_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="filters\vbox_filters.cpp">
@@ -90,6 +96,12 @@
       <Filter>Исходные файлы</Filter>
     </ClCompile>
     <ClCompile Include="hooks\firmwaretable_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\hypervobj_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\system_hooks.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
   </ItemGroup>

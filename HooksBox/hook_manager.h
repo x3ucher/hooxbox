@@ -3,7 +3,6 @@
 
 #include <windows.h>
 
-
 // Инициализация всех хуков
 bool InitializeHooks();
 
@@ -19,5 +18,6 @@ bool InitializeWndHooks();
 bool InitializeNetworkHooks();
 bool InitializeMacAddresHooks();
 bool InitializeFirmwareTableHooks();
+bool InitializeHyperVObjHooks();
 
 #endif // HOOK_MANAGER_H

@@ -102,7 +102,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WINSOCKAPI_;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WINSOCKAPI_;WINDOWS_IGNORE_PACKING_MISMATCH;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(ProjectDir)hooks;$(ProjectDir)filters;$(ProjectDir)utils;$(SolutionDir)tools\MinHook\include</AdditionalIncludeDirectories>
     </ClCompile>
@@ -139,9 +139,11 @@
     <ClInclude Include="hooks\device_hooks.h" />
     <ClInclude Include="hooks\file_hooks.h" />
     <ClInclude Include="hooks\firmwaretable_hooks.h" />
+    <ClInclude Include="hooks\hypervobj_hooks.h" />
     <ClInclude Include="hooks\network_hooks.h" />
     <ClInclude Include="hooks\processes_hooks.h" />
     <ClInclude Include="hooks\registry_hooks.h" />
+    <ClInclude Include="hooks\system_hooks.h" />
     <ClInclude Include="hooks\window_hooks.h" />
     <ClInclude Include="hook_dll_main.h" />
     <ClInclude Include="hook_manager.h" />
@@ -153,9 +155,11 @@
     <ClCompile Include="hooks\device_hooks.cpp" />
     <ClCompile Include="hooks\file_hooks.cpp" />
     <ClCompile Include="hooks\firmwaretable_hooks.cpp" />
+    <ClCompile Include="hooks\hypervobj_hooks.cpp" />
     <ClCompile Include="hooks\network_hooks.cpp" />
     <ClCompile Include="hooks\processes_hooks.cpp" />
     <ClCompile Include="hooks\registry_hooks.cpp" />
+    <ClCompile Include="hooks\system_hooks.cpp" />
     <ClCompile Include="hooks\window_hooks.cpp" />
     <ClCompile Include="hook_dll_main.cpp" />
     <ClCompile Include="hook_manager.cpp" />

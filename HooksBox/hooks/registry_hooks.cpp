@@ -53,7 +53,7 @@ LSTATUS WINAPI hook_RegQueryValueExW(
         if (wcscmp(lpValueName, L"SystemBiosVersion") == 0) {
             if (wcsstr(currentValue, L"VBOX") != NULL) {
                 const wchar_t* fakeValue = L"ALASKA - 1072009";
-                DWORD newSize = (wcslen(fakeValue) + 1) * sizeof(wchar_t);
+                DWORD newSize = static_cast<DWORD>((wcslen(fakeValue) + 1) * sizeof(wchar_t));
                 if (lpData && lpcbData && *lpcbData >= newSize) {
                     wcscpy_s((wchar_t*)lpData, *lpcbData / sizeof(wchar_t), fakeValue);
                     if (lpType) *lpType = tempType;
@@ -69,7 +69,7 @@ LSTATUS WINAPI hook_RegQueryValueExW(
         else if (wcscmp(lpValueName, L"Identifier") == 0) {
             if (wcsstr(currentValue, L"VBOX") != NULL) {
                 const wchar_t* fakeValue = L"ATA HARDDISK";
-                DWORD newSize = (wcslen(fakeValue) + 1) * sizeof(wchar_t);
+                DWORD newSize = static_cast<DWORD>((wcslen(fakeValue) + 1) * sizeof(wchar_t));
 
                 if (lpData && lpcbData && *lpcbData >= newSize) {
                     wcscpy_s((wchar_t*)lpData, *lpcbData / sizeof(wchar_t), fakeValue);

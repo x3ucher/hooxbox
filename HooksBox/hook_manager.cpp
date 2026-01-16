@@ -7,6 +7,7 @@
 #include "window_hooks.h"
 #include "network_hooks.h"
 #include "firmwaretable_hooks.h"
+#include "hypervobj_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -57,6 +58,11 @@ bool InitializeHooks() {
 
     if (!InitializeFirmwareTableHooks()) {
         DebugPrint("[Firmware Table]");
+        return false;
+    }
+
+    if (!InitializeHyperVObjHooks()) {
+        DebugPrint("[Hyper-V Objects]");
         return false;
     }
 
@@ -331,4 +337,45 @@ bool InitializeFirmwareTableHooks() {
     DebugPrint("[FIRMWARE_TABLE_HOOK] EnumSystemFirmwareTables hook created and enabled successfully");
 
     return true; 
+}
+
+bool InitializeHyperVObjHooks() {
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    if (!hNtdll) {
+        DebugPrint("[HYPER-V HOOK] Failed to get ntdll handle");
+        return false;
+    }
+
+    FARPROC pNtOpenDirectoryObject = GetProcAddress(hNtdll, "NtOpenDirectoryObject");
+    FARPROC pNtQueryDirectoryObject = GetProcAddress(hNtdll, "NtQueryDirectoryObject");
+
+    if (!pNtOpenDirectoryObject || !pNtQueryDirectoryObject) {
+        DebugPrint("[HYPER-V HOOK] Failed to get hyper-v functions addresses");
+        return false;
+    }
+
+    if (MH_CreateHook(pNtOpenDirectoryObject, hook_NtOpenDirectoryObject,
+        (LPVOID*)&original_NtOpenDirectoryObject) != MH_OK) {
+        DebugPrint("[HYPER-V HOOK] Failed to create hook for NtOpenDirectoryObject");
+        return false;
+    }
+
+    if (MH_CreateHook(pNtQueryDirectoryObject, hook_NtQueryDirectoryObject,
+        (LPVOID*)&original_NtQueryDirectoryObject) != MH_OK) {
+        DebugPrint("[HYPER-V HOOK] Failed to create hook for NtQueryDirectoryObject");
+        return false;
+    }
+
+    DebugPrint("[HYPER-V HOOK] Hyper-V hooks created successfully");
+
+
+    if (MH_EnableHook(pNtOpenDirectoryObject) != MH_OK ||
+        MH_EnableHook(pNtQueryDirectoryObject) != MH_OK) {
+        DebugPrint("[HYPER-V HOOK] Failed to enable hyper-v hooks");
+        return false;
+    }
+
+    DebugPrint("[HYPER-V HOOK] Hyper-V hooks enalebled successfully");
+
+    return true;
 }
