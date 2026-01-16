@@ -8,6 +8,7 @@
 #include "network_hooks.h"
 #include "firmwaretable_hooks.h"
 #include "hypervobj_hooks.h"
+#include "system_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -63,6 +64,11 @@ bool InitializeHooks() {
 
     if (!InitializeHyperVObjHooks()) {
         DebugPrint("[Hyper-V Objects]");
+        return false;
+    }
+
+    if (!InitializeSystemHooks()) {
+        DebugPrint("[System]");
         return false;
     }
 
@@ -377,5 +383,23 @@ bool InitializeHyperVObjHooks() {
 
     DebugPrint("[HYPER-V HOOK] Hyper-V hooks enalebled successfully");
 
+    return true;
+}
+
+bool InitializeSystemHooks() {
+    if (MH_CreateHook(&SetupDiEnumDeviceInfo, &hook_SetupDiEnumDeviceInfo,
+        reinterpret_cast<void**>(&original_SetupDiEnumDeviceInfo)) != MH_OK) {
+        DebugPrint("[SYSTEM] Failed to create hook for SetupDiEnumDeviceInfo");
+        return false;
+    }
+
+    DebugPrint("[SYSTEM] File hooks created successfully");
+
+    if (MH_EnableHook(&SetupDiEnumDeviceInfo) != MH_OK) {
+        DebugPrint("[SYSTEM] Failed to enable hooks");
+        return false;
+    }
+
+    DebugPrint("[SYSTEM] File hooks enable successfully");
     return true;
 }

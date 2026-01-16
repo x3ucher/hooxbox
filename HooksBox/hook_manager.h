@@ -19,5 +19,6 @@ bool InitializeNetworkHooks();
 bool InitializeMacAddresHooks();
 bool InitializeFirmwareTableHooks();
 bool InitializeHyperVObjHooks();
+bool InitializeSystemHooks();
 
 #endif // HOOK_MANAGER_H

@@ -1,8 +1,6 @@
 #include "vbox_filters.h"
 #include "log_utils.h"
 #include "../config.h"
-#include <shlwapi.h>
-#pragma comment(lib, "shlwapi.lib")
 
 // Проверяет, является ли ключ реестра связанным с VirtualBox
 bool IsVBoxRegistryKey(HKEY hKey, LPCWSTR lpSubKey, LPCWSTR lpValueName) {
@@ -136,4 +134,53 @@ void FilterVirtualBoxStrings(BYTE* data, DWORD size) {
             }
         }
     }
+}
+
+bool IsVirtualDevice(HDEVINFO hDevInfo, SP_DEVINFO_DATA& DeviceInfoData) {
+    DWORD dwPropertyRegDataType;
+    LPTSTR buffer = NULL;
+    DWORD dwSize = 0;
+    bool isVirtual = false;
+
+    while (!SetupDiGetDeviceRegistryProperty(
+        hDevInfo, &DeviceInfoData, SPDRP_HARDWAREID, &dwPropertyRegDataType,
+        (PBYTE)buffer, dwSize, &dwSize)) {
+
+        if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+            if (buffer) LocalFree(buffer);
+            buffer = (LPTSTR)LocalAlloc(LPTR, dwSize * 2);
+            if (buffer == NULL) break;
+        }
+        else {
+            break;
+        }
+    }
+
+    if (buffer) {
+        std::wstring hardwareID(buffer);
+        std::transform(hardwareID.begin(), hardwareID.end(), hardwareID.begin(), ::towlower);
+
+        if (hardwareID.find(L"vbox") != std::wstring::npos ||
+            hardwareID.find(L"vmware") != std::wstring::npos ||
+            hardwareID.find(L"qemu") != std::wstring::npos ||
+            hardwareID.find(L"virtual") != std::wstring::npos) {
+            isVirtual = true;
+        }
+
+        LocalFree(buffer);
+    }
+
+    return isVirtual;
+}
+
+bool IsDiskDriveDevice(HDEVINFO hDevInfo) {
+    GUID guidDiskDrive = GUID_DEVCLASS_DISKDRIVE;
+    GUID classGuid;
+    DWORD requiredSize;
+
+    if (SetupDiGetClassDevsEx(NULL, NULL, NULL, 0, NULL, NULL, NULL)) {
+        return false;
+    }
+
+    return true; 
 }
