@@ -6,6 +6,7 @@
 #include <algorithm>
 
 SetupDiEnumDeviceInfo_t original_SetupDiEnumDeviceInfo = nullptr;
+GetDiskFreeSpaceExW_t original_GetDiskFreeSpaceExW = nullptr;
 static std::vector<DWORD> g_hiddenDeviceIndices;
 
 void GatherVirtualDevices(HDEVINFO hDevInfo) {
@@ -91,4 +92,35 @@ BOOL WINAPI hook_SetupDiEnumDeviceInfo(
 
     SetLastError(ERROR_NO_MORE_ITEMS);
     return FALSE;
+}
+
+BOOL WINAPI hook_GetDiskFreeSpaceExW(
+    LPCWSTR lpDirectoryName,
+    PULARGE_INTEGER lpFreeBytesAvailableToCaller,
+    PULARGE_INTEGER lpTotalNumberOfBytes,
+    PULARGE_INTEGER lpTotalNumberOfFreeBytes
+) {
+    BOOL result = original_GetDiskFreeSpaceExW(
+        lpDirectoryName,
+        lpFreeBytesAvailableToCaller,
+        lpTotalNumberOfBytes,
+        lpTotalNumberOfFreeBytes
+    );
+
+    if (result && lpTotalNumberOfBytes != NULL) {
+        ULONGLONG minHardDiskSize = 80ULL * 1024ULL * 1024ULL * 1024ULL;
+        if (lpTotalNumberOfBytes->QuadPart < minHardDiskSize) {
+            lpTotalNumberOfBytes->QuadPart = 100ULL * 1024ULL * 1024ULL * 1024ULL;
+            if (lpFreeBytesAvailableToCaller != NULL) {
+                lpFreeBytesAvailableToCaller->QuadPart =
+                    lpTotalNumberOfBytes->QuadPart * 20 / 100;
+            }
+
+            if (lpTotalNumberOfFreeBytes != NULL) {
+                lpTotalNumberOfFreeBytes->QuadPart =
+                    lpFreeBytesAvailableToCaller->QuadPart;
+            }
+        }
+    }
+    return result;
 }

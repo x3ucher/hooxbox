@@ -393,13 +393,28 @@ bool InitializeSystemHooks() {
         return false;
     }
 
-    DebugPrint("[SYSTEM] File hooks created successfully");
+    DebugPrint("[SYSTEM] SetupDiEnumDeviceInfo hooks created successfully");
 
     if (MH_EnableHook(&SetupDiEnumDeviceInfo) != MH_OK) {
-        DebugPrint("[SYSTEM] Failed to enable hooks");
+        DebugPrint("[SYSTEM] Failed to enable SetupDiEnumDeviceInfo hooks");
         return false;
     }
 
-    DebugPrint("[SYSTEM] File hooks enable successfully");
+    if (MH_CreateHook(&GetDiskFreeSpaceExW, &hook_GetDiskFreeSpaceExW,
+        reinterpret_cast<void**>(&original_GetDiskFreeSpaceExW)) != MH_OK) {
+        DebugPrint("[SYSTEM] Failed to create hook for GetDiskFreeSpaceExW");
+        return false;
+    }
+
+    DebugPrint("[SYSTEM] GetDiskFreeSpaceExW hooks created successfully");
+
+    if (MH_EnableHook(&GetDiskFreeSpaceExW) != MH_OK) {
+        DebugPrint("[SYSTEM] Failed to enable GetDiskFreeSpaceExW hooks");
+        return false;
+    }
+
+    DebugPrint("[SYSTEM] System hooks enable successfully");
     return true;
 }
+
+
