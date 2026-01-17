@@ -76,9 +76,7 @@ bool InitializeHooks() {
     return true;
 }
 
-// Очистка хуков
 void CleanupHooks() {
-    // Отключаем все хуки
     MH_DisableHook(nullptr);
     MH_Uninitialize();
     DebugPrint("[HOOK_DLL] Hooks uninstalled");
@@ -96,11 +94,18 @@ bool InitializeRegistryHooks() {
         DebugPrint("[HOOK_DLL] Failed to create hook for RegQueryValueExW");
         return false;
     }
+    
+    if (MH_CreateHook(&RegEnumKeyExW, &hook_RegEnumKeyExW,
+        reinterpret_cast<void**>(&original_RegEnumKeyExW)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for RegEnumKeyExW");
+        return false;
+    }
 
     DebugPrint("[HOOK_DLL] Registry hooks created successfully");
 
     if (MH_EnableHook(&RegOpenKeyExW) != MH_OK ||
-        MH_EnableHook(&RegQueryValueExW) != MH_OK) {
+        MH_EnableHook(&RegQueryValueExW) != MH_OK ||
+        MH_EnableHook(&RegEnumKeyExW)) {
         DebugPrint("[HOOK_DLL] Failed to enable hooks");
         return false;
     }

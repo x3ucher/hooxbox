@@ -7,6 +7,7 @@
 
 RegOpenKeyExW_t original_RegOpenKeyExW = nullptr;
 RegQueryValueExW_t original_RegQueryValueExW = nullptr;
+RegEnumKeyExW_t original_RegEnumKeyExW = nullptr;
 
 LSTATUS WINAPI hook_RegOpenKeyExW(
     HKEY hKey,
@@ -22,6 +23,13 @@ LSTATUS WINAPI hook_RegOpenKeyExW(
     if (IsVBoxRegistryKey(hKey, lpSubKey)) {
         DebugPrint("[HOOK_DLL] BLOCKED: Attempt to access VirtualBox registry key!");
         return ERROR_FILE_NOT_FOUND;
+    }
+
+    if (lpSubKey && (wcscmp(lpSubKey, L"System\\CurrentControlSet\\Enum\\IDE") == 0 ||
+        wcscmp(lpSubKey, L"System\\CurrentControlSet\\Enum\\SCSI") == 0 ||
+        wcsstr(lpSubKey, L"System\\CurrentControlSet\\Enum\\IDE\\") != nullptr ||
+        wcsstr(lpSubKey, L"System\\CurrentControlSet\\Enum\\SCSI\\") != nullptr)) {
+        DebugPrintW(L"[HOOK_DLL] Opening disk enumeration path - will filter virtual devices");
     }
 
     return original_RegOpenKeyExW(hKey, lpSubKey, ulOptions, samDesired, phkResult);
@@ -135,4 +143,33 @@ LSTATUS WINAPI hook_RegQueryValueExW(
     }
 
     return original_RegQueryValueExW(hKey, lpValueName, lpReserved, lpType, lpData, lpcbData);
+}
+
+LSTATUS WINAPI hook_RegEnumKeyExW(
+    HKEY hKey,
+    DWORD dwIndex,
+    LPWSTR lpName,
+    LPDWORD lpcName,
+    LPDWORD lpReserved,
+    LPWSTR lpClass,
+    LPDWORD lpcClass,
+    PFILETIME lpftLastWriteTime
+) {
+    LSTATUS result = original_RegEnumKeyExW(hKey, dwIndex, lpName, lpcName, lpReserved,
+        lpClass, lpcClass, lpftLastWriteTime);
+
+    if (result == ERROR_SUCCESS && lpName) {
+        std::wstring keyName(lpName);
+        std::wstring lowerName = keyName;
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::towlower);
+
+        for (int i = 0; i < VBOX_DISK_ENUM_CHECKS_COUNT; i++) {
+            if (lowerName.find(VBOX_DISK_ENUM_CHECKS[i]) != std::wstring::npos) {
+                DebugPrintW(L"[HOOK_DLL] Hiding virtual device in enumeration");
+                return ERROR_NO_MORE_ITEMS;
+            }
+        }
+    }
+
+    return result;
 }
