@@ -73,12 +73,12 @@ const std::wstring VIRTUALBOX_PROVIDER_NAME = L"VirtualBox Shared Folders";
 
 #pragma pack(push, 1)
 struct FakeAcpiTable {
-    char signature[4] = { 'R', 'S', 'D', ' ' };
+    char signature[5] = { 'R', 'S', 'D', ' ', 0 };  // 5 גלוסעמ 4
     DWORD length = 36;
     BYTE revision = 0;
     BYTE checksum = 0;
-    char oemid[6] = { 'A', 'W', 'A', 'R', 'E', ' ' };
-    char oemtableid[8] = { 'G', 'E', 'N', 'U', 'I', 'N', 'E', ' ' };
+    char oemid[7] = { 'A', 'W', 'A', 'R', 'E', ' ', 0 };  // 7 גלוסעמ 6
+    char oemtableid[9] = { 'G', 'E', 'N', 'U', 'I', 'N', 'E', ' ', 0 };  // 9 גלוסעמ 8
     DWORD oemrevision = 1;
     DWORD creatorid = 0;
     DWORD creatorrevision = 0;
