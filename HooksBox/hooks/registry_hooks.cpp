@@ -1,6 +1,7 @@
 #include "registry_hooks.h"
 #include "log_utils.h"
 #include "vbox_filters.h"
+#include "../config.h"
 #include <string>
 #include <map>
 
@@ -56,24 +57,13 @@ LSTATUS WINAPI hook_RegQueryValueExW(
             }
 
             if (isNumericValue && _wcsicmp(lpValueName, L"Count") != 0) {
-                const wchar_t* szChecks[] = {
-                    L"qemu",
-                    L"virtio",
-                    L"vmware",
-                    L"vbox",
-                    L"xen",
-                    L"vmw",
-                    L"virtual"
-                };
-                const int szChecksLength = sizeof(szChecks) / sizeof(szChecks[0]);
-
                 std::wstring currentStr(currentValue);
                 std::wstring lowerValue = currentStr;
                 std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), ::towlower);
 
                 bool found = false;
-                for (int i = 0; i < szChecksLength; i++) {
-                    if (lowerValue.find(szChecks[i]) != std::wstring::npos) {
+                for (int i = 0; i < VBOX_DISK_ENUM_CHECKS_COUNT; i++) {
+                    if (lowerValue.find(VBOX_DISK_ENUM_CHECKS[i]) != std::wstring::npos) {
                         found = true;
                         break;
                     }
