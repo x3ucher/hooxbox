@@ -18,6 +18,12 @@ HooksBox implements a proactive defense mechanism that intercepts and modifies s
 - **Customizable Hooks**: Easily extendable to cover additional detection vectors
 - **Lightweight Design**: Minimal performance impact on the host system
 
+## 📊 Profiles of Operation
+HooksBox supports three configurable operational profiles to balance between detection coverage, performance, and stability:
+- **Minimal profile:** registry + file system + basic network indicators; focused on stability.
+- **Advanced profile:** adds WMI/devices; applicable to most mass detection methods.
+- **Enhanced profile:** includes a kernel driver for low-level indicators and timings; maximum coverage.
+
 ## 🏗️ Architecture
 
 <img width="1314" height="713" alt="image" src="https://github.com/user-attachments/assets/46bf1f22-a8a8-4af4-9d95-4d967526f696" />
@@ -57,11 +63,12 @@ HooksBox/
 │   ├── hooks/           # Individual API hook implementations
 │   │   ├── registry/    # Registry-related hooks
 │   │   ├── filesystem/  # File system hooks
+│   │   ├── wmi/         # WMI hooks
 │   │   └── system/      # System information hooks
 │   └── utils/           # Utilities and helpers
 ├── Launcher
-├── tools/
-    └── minhook/        # MinHook submodule
+└── tools/
+    └── minhook/         # MinHook submodule
 ```
 
 ## 🧠 Future Enhancements
