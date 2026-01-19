@@ -54,6 +54,10 @@ To verify HooksBox's effectiveness, you can use these detection tools:
 - [VMDetect](https://github.com/PerryWerneck/vmdetect/) - Virtual machine detection toolkit
 - [pafish](https://github.com/a0rtega/pafish) - Paranoid Fish - demonstration tool for detecting analysis environments
 
+### Example of use on al-khaser:
+
+![collblack](https://github.com/user-attachments/assets/6d55dcf9-ec3a-4cb7-ab18-4c51b9b2e896)
+
 ## 📁 Project Structure
 
 ```bash
