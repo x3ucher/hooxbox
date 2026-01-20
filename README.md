@@ -79,7 +79,7 @@ HooksBox/
 Planned features for upcoming releases:
 
 - [ ] Extended Virtualization Support: VMware, Hyper-V, and QEMU masking
-- [ ] Kernel-mode Components: Driver-level hooking for deeper protection
+- [ ] Host Components: External hooking for deeper protection
 - [ ] Cross-platform Compatibility: Linux sandbox protection modules
 
 ## ⚠️ Disclaimer & Legal
