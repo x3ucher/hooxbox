@@ -1,116 +1,290 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
-#define MH_STATIC
-#include "MinHook.h"
-
 #include "wmi_hooks.h"
 
 #include <wbemidl.h>
+#include <shlwapi.h>
 #include <string>
+#include <map>
+#include <cwctype>
 
-// ===========================================================================
-// Logger
-// ===========================================================================
+#pragma comment(lib, "shlwapi.lib")
 
-static CRITICAL_SECTION s_logCs;
-static LONG             s_logCsInit = 0;  // 0=uninit, 1=initing, 2=ready
+namespace WmiMaskHooks {
 
-static void EnsureLogCsInit()
+// Globals — definitions
+FnNext       g_pOrigNext       = nullptr;
+FnNext       g_pOrigNextFilter = nullptr;
+FnWbemGet    g_pOrigGet        = nullptr;
+FnExecQuery  g_pOrigExecQuery  = nullptr;
+
+bool g_BaseBoardEnabled       = false;
+bool g_BusEnabled             = false;
+bool g_PnPDeviceEnabled       = false;
+bool g_BiosEnabled            = false;
+bool g_ComputerSystemEnabled  = false;
+bool g_VideoEnabled           = false;
+bool g_ProcessorEnabled       = false;
+bool g_LogicalDiskEnabled     = false;
+bool g_ThermalEnabled         = false;
+bool g_EventLogEnabled        = false;
+bool g_NonEmptyEnabled        = false;
+
+static const wchar_t* kCriticalClasses[] = {
+    L"Win32_Fan",
+    L"Win32_CacheMemory",
+    L"Win32_PhysicalMemory",
+    L"Win32_MemoryDevice",
+    L"Win32_MemoryArray",
+    L"Win32_VoltageProbe",
+    L"Win32_PortConnector",
+    L"Win32_SMBIOSMemory",
+    L"Win32_PerfFormattedData_Counters_ThermalZoneInformation",
+    L"CIM_Memory",
+    L"CIM_NumericSensor",
+    L"CIM_PhysicalConnector",
+    L"CIM_Sensor",
+    L"CIM_Slot",
+    L"CIM_TemperatureSensor",
+    L"CIM_VoltageSensor",
+    // root\WMI namespace — same MinHook patches catch it because the
+    // Next / Get / ExecQuery function bodies are shared across all
+    // IWbemServices instances regardless of which namespace they bind to.
+    L"MSAcpi_ThermalZoneTemperature",
+};
+static const ULONG kCriticalClassCount =
+    sizeof(kCriticalClasses) / sizeof(kCriticalClasses[0]);
+
+static bool IsCriticalClass(const std::wstring& cls)
 {
-    if (InterlockedCompareExchange(&s_logCsInit, 1, 0) == 0)
+    if (cls.empty()) return false;
+    for (ULONG k = 0; k < kCriticalClassCount; ++k)
+        if (_wcsicmp(cls.c_str(), kCriticalClasses[k]) == 0)
+            return true;
+    return false;
+}
+
+// Extracts the class name from a WQL "SELECT … FROM <class> [WHERE …]"
+// string.  Case-insensitive.  Returns empty on malformed input.
+static std::wstring ParseClassFromWql(BSTR wql)
+{
+    if (!wql) return {};
+    // StrStrIW finds case-insensitive substring; look for " FROM "
+    // first, fall back to "FROM " at the very start.
+    const wchar_t* from = StrStrIW(wql, L" FROM ");
+    if (from)
+        from += 6;
+    else if (_wcsnicmp(wql, L"FROM ", 5) == 0)
+        from = wql + 5;
+    else
+        return {};
+
+    while (*from && iswspace(*from)) ++from;
+    const wchar_t* start = from;
+    while (*from && (iswalnum(*from) || *from == L'_')) ++from;
+    return std::wstring(start, from - start);
+}
+
+struct EnumState
+{
+    std::wstring cls;
+    bool         hasReturnedReal = false;
+    bool         injected        = false;
+};
+
+static std::map<IEnumWbemClassObject*, EnumState> s_enumStates;
+static CRITICAL_SECTION                            s_enumStatesCs;
+static LONG                                        s_enumStatesCsInit = 0;
+
+static void EnsureEnumStatesCsInit()
+{
+    if (InterlockedCompareExchange(&s_enumStatesCsInit, 1, 0) == 0)
     {
-        InitializeCriticalSection(&s_logCs);
-        InterlockedExchange(&s_logCsInit, 2);
+        InitializeCriticalSection(&s_enumStatesCs);
+        InterlockedExchange(&s_enumStatesCsInit, 2);
     }
-    while (InterlockedCompareExchange(&s_logCsInit, 2, 2) != 2)
+    while (InterlockedCompareExchange(&s_enumStatesCsInit, 2, 2) != 2)
         Sleep(0);
 }
 
-static std::string ToUtf8(const wchar_t* wide)
+static void RegisterCriticalEnum(IEnumWbemClassObject* pEnum, const std::wstring& cls)
 {
-    if (!wide || !*wide) return {};
-    int bytes = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
-    if (bytes <= 0) return {};
-    std::string s(bytes - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide, -1, &s[0], bytes, nullptr, nullptr);
-    return s;
+    EnsureEnumStatesCsInit();
+    EnterCriticalSection(&s_enumStatesCs);
+    s_enumStates[pEnum] = EnumState{ cls, false, false };
+    LeaveCriticalSection(&s_enumStatesCs);
 }
 
-void WmiHooks::Log(const wchar_t* level, const std::wstring& msg)
+// Returns the class name iff this enumerator is critical AND has not yet
+// returned any real object AND has not yet been given a fake one.
+// Atomically marks `injected = true` on success.
+static std::wstring ClaimInjectionSlot(IEnumWbemClassObject* pEnum)
 {
-    EnsureLogCsInit();
-    EnterCriticalSection(&s_logCs);
+    if (!g_NonEmptyEnabled) return {};
 
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-
-    wchar_t timeBuf[32];
-    swprintf_s(timeBuf, L"%04d-%02d-%02d %02d:%02d:%02d",
-               st.wYear, st.wMonth, st.wDay,
-               st.wHour, st.wMinute, st.wSecond);
-
-    std::wstring line = std::wstring(timeBuf) + L" [" + level + L"] " + msg + L"\n";
-    std::string utf8 = ToUtf8(line.c_str());
-
-    // Write UTF-8 BOM on first write to an empty file.
-    static bool s_bomWritten = false;
-    HANDLE hFile = CreateFileW(L"sandbox_evasion.log", GENERIC_WRITE,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile != INVALID_HANDLE_VALUE)
+    EnsureEnumStatesCsInit();
+    std::wstring result;
+    EnterCriticalSection(&s_enumStatesCs);
+    auto it = s_enumStates.find(pEnum);
+    if (it != s_enumStates.end() &&
+        !it->second.hasReturnedReal &&
+        !it->second.injected)
     {
-        if (!s_bomWritten)
+        result = it->second.cls;
+        it->second.injected = true;
+    }
+    LeaveCriticalSection(&s_enumStatesCs);
+    return result;
+}
+
+// Called when Next really returned >=1 object so we never inject after
+// the caller has already seen a real instance.
+static void MarkEnumYieldedReal(IEnumWbemClassObject* pEnum)
+{
+    EnsureEnumStatesCsInit();
+    EnterCriticalSection(&s_enumStatesCs);
+    auto it = s_enumStates.find(pEnum);
+    if (it != s_enumStates.end())
+        it->second.hasReturnedReal = true;
+    LeaveCriticalSection(&s_enumStatesCs);
+}
+
+namespace {
+
+class FakeWbemObject : public IWbemClassObject
+{
+public:
+    explicit FakeWbemObject(const std::wstring& cls)
+        : m_ref(1), m_class(cls) {}
+
+    // IUnknown
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IWbemClassObject)
         {
-            LARGE_INTEGER size = {};
-            GetFileSizeEx(hFile, &size);
-            if (size.QuadPart == 0)
-            {
-                DWORD wr = 0;
-                const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
-                WriteFile(hFile, bom, sizeof(bom), &wr, nullptr);
-            }
-            s_bomWritten = true;
+            *ppv = static_cast<IWbemClassObject*>(this);
+            AddRef();
+            return S_OK;
         }
-        SetFilePointer(hFile, 0, nullptr, FILE_END);
-        DWORD wr = 0;
-        WriteFile(hFile, utf8.c_str(), (DWORD)utf8.size(), &wr, nullptr);
-        CloseHandle(hFile);
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override
+    {
+        return (ULONG)InterlockedIncrement(&m_ref);
+    }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        LONG n = InterlockedDecrement(&m_ref);
+        if (n == 0) delete this;
+        return (ULONG)n;
     }
 
-    LeaveCriticalSection(&s_logCs);
+    // IWbemClassObject::Get — class-aware: returns plausible values for
+    // properties whose detectors actually inspect the value.
+    HRESULT STDMETHODCALLTYPE Get(LPCWSTR wszName, LONG /*lFlags*/,
+                                   VARIANT* pVal, CIMTYPE* pType,
+                                   LONG* plFlavor) override
+    {
+        // __CLASS — let callers identify what we're pretending to be.
+        if (wszName && wcscmp(wszName, L"__CLASS") == 0)
+        {
+            if (pVal)
+            {
+                VariantInit(pVal);
+                pVal->vt      = VT_BSTR;
+                pVal->bstrVal = SysAllocString(m_class.c_str());
+            }
+            if (pType)    *pType    = CIM_STRING;
+            if (plFlavor) *plFlavor = 0;
+            return WBEM_S_NO_ERROR;
+        }
+
+        // MSAcpi_ThermalZoneTemperature.CurrentTemperature → 300 (uint32).
+        if (wszName &&
+            m_class == L"MSAcpi_ThermalZoneTemperature" &&
+            wcscmp(wszName, L"CurrentTemperature") == 0)
+        {
+            if (pVal)
+            {
+                VariantInit(pVal);
+                pVal->vt   = VT_I4;
+                pVal->lVal = 300;
+            }
+            if (pType)    *pType    = CIM_UINT32;
+            if (plFlavor) *plFlavor = 0;
+            return WBEM_S_NO_ERROR;
+        }
+
+        // Default: empty BSTR so callers that just dereference bstrVal
+        // don't crash on a NULL.
+        if (pVal)
+        {
+            VariantInit(pVal);
+            pVal->vt      = VT_BSTR;
+            pVal->bstrVal = SysAllocString(L"");
+        }
+        if (pType)    *pType    = CIM_STRING;
+        if (plFlavor) *plFlavor = 0;
+        return WBEM_S_NO_ERROR;
+    }
+
+    // Stub everything else with E_NOTIMPL.
+    HRESULT STDMETHODCALLTYPE GetQualifierSet(IWbemQualifierSet**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Put(LPCWSTR, LONG, VARIANT*, CIMTYPE) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Delete(LPCWSTR) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetNames(LPCWSTR, LONG, VARIANT*, SAFEARRAY**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE BeginEnumeration(LONG) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Next(LONG, BSTR*, VARIANT*, CIMTYPE*, LONG*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EndEnumeration() override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetPropertyQualifierSet(LPCWSTR, IWbemQualifierSet**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Clone(IWbemClassObject**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetObjectText(LONG, BSTR*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SpawnDerivedClass(LONG, IWbemClassObject**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SpawnInstance(LONG, IWbemClassObject**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CompareTo(LONG, IWbemClassObject*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetPropertyOrigin(LPCWSTR, BSTR*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE InheritsFrom(LPCWSTR) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetMethod(LPCWSTR, LONG, IWbemClassObject**, IWbemClassObject**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE PutMethod(LPCWSTR, LONG, IWbemClassObject*, IWbemClassObject*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE DeleteMethod(LPCWSTR) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE BeginMethodEnumeration(LONG) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE NextMethod(LONG, BSTR*, IWbemClassObject**, IWbemClassObject**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EndMethodEnumeration() override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetMethodQualifierSet(LPCWSTR, IWbemQualifierSet**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetMethodOrigin(LPCWSTR, BSTR*) override { return E_NOTIMPL; }
+
+private:
+    LONG          m_ref;
+    std::wstring  m_class;
+};
+
+HRESULT STDMETHODCALLTYPE Hook_ExecQuery(
+    IWbemServices*         pThis,
+    BSTR                   strQueryLanguage,
+    BSTR                   strQuery,
+    LONG                   lFlags,
+    IWbemContext*          pCtx,
+    IEnumWbemClassObject** ppEnum)
+{
+    HRESULT hr = g_pOrigExecQuery(pThis, strQueryLanguage, strQuery,
+                                   lFlags, pCtx, ppEnum);
+    if (SUCCEEDED(hr) && ppEnum && *ppEnum && g_NonEmptyEnabled)
+    {
+        std::wstring cls = ParseClassFromWql(strQuery);
+        if (IsCriticalClass(cls))
+        {
+            RegisterCriticalEnum(*ppEnum, cls);
+            WMIHOOK_INFO(L"ExecQuery: tracking critical class " + cls);
+        }
+    }
+    return hr;
 }
 
-// ===========================================================================
-// IEnumWbemClassObject vtable layout — x64, MSVC COM ABI
-//
-//  slot  method
-//   0    IUnknown::QueryInterface
-//   1    IUnknown::AddRef
-//   2    IUnknown::Release
-//   3    IEnumWbemClassObject::Reset
-//   4    IEnumWbemClassObject::Next          <-- hook target
-//   5    IEnumWbemClassObject::NextAsync
-//   6    IEnumWbemClassObject::Clone
-//   7    IEnumWbemClassObject::Skip
-// ===========================================================================
-
-static const int kVtblSlot_Next = 4;
-
-typedef HRESULT (STDMETHODCALLTYPE *FnNext)(
-    IEnumWbemClassObject* pThis,
-    LONG                  lTimeout,
-    ULONG                 uCount,
-    IWbemClassObject**    apObjects,
-    ULONG*                puReturned);
-
-static FnNext  g_pOrigNext   = nullptr;
-static LPVOID  g_pNextTarget = nullptr;
-
-// ---------------------------------------------------------------------------
-// Hook_Next — detour for IEnumWbemClassObject::Next
-// ---------------------------------------------------------------------------
-static HRESULT STDMETHODCALLTYPE Hook_Next(
+// IEnumWbemClassObject::Next — plain logging detour.
+HRESULT STDMETHODCALLTYPE Hook_Next(
     IEnumWbemClassObject* pThis,
     LONG                  lTimeout,
     ULONG                 uCount,
@@ -123,110 +297,21 @@ static HRESULT STDMETHODCALLTYPE Hook_Next(
     return hr;
 }
 
-// ---------------------------------------------------------------------------
-// HookEnumeratorNext
-// ---------------------------------------------------------------------------
-bool HookEnumeratorNext(IEnumWbemClassObject* pEnum)
-{
-    if (!pEnum)
-    {
-        WMIHOOK_ERROR(L"HookEnumeratorNext: pEnum is null");
-        return false;
-    }
-
-    void** vtbl   = *reinterpret_cast<void***>(pEnum);
-    g_pNextTarget = vtbl[kVtblSlot_Next];
-
-    MH_STATUS st = MH_Initialize();
-    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED)
-    {
-        WMIHOOK_ERROR(L"HookEnumeratorNext: MH_Initialize failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        return false;
-    }
-
-    st = MH_CreateHook(g_pNextTarget,
-                       reinterpret_cast<LPVOID>(&Hook_Next),
-                       reinterpret_cast<LPVOID*>(&g_pOrigNext));
-    if (st != MH_OK)
-    {
-        WMIHOOK_ERROR(L"HookEnumeratorNext: MH_CreateHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pNextTarget = nullptr;
-        return false;
-    }
-
-    st = MH_EnableHook(g_pNextTarget);
-    if (st != MH_OK)
-    {
-        MH_RemoveHook(g_pNextTarget);
-        WMIHOOK_ERROR(L"HookEnumeratorNext: MH_EnableHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pNextTarget = nullptr;
-        return false;
-    }
-
-    uintptr_t addr = reinterpret_cast<uintptr_t>(g_pNextTarget);
-    std::wstring hex(16, L'0');
-    for (int i = 15; i >= 0; --i, addr >>= 4)
-        hex[i] = L"0123456789ABCDEF"[addr & 0xF];
-    WMIHOOK_INFO(L"HookEnumeratorNext: installed at 0x" + hex);
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// UnhookEnumeratorNext
-// ---------------------------------------------------------------------------
-void UnhookEnumeratorNext()
-{
-    if (!g_pNextTarget) return;
-
-    MH_DisableHook(g_pNextTarget);
-    MH_RemoveHook(g_pNextTarget);
-    MH_Uninitialize();
-
-    WMIHOOK_INFO(L"UnhookEnumeratorNext: hook removed");
-    g_pNextTarget = nullptr;
-    g_pOrigNext   = nullptr;
-}
-
-// ===========================================================================
-// PnP Name filter hook
-//
-// Removes WMI objects whose Name contains a known VM-indicator substring.
-// When the original Next returns a batch that is entirely filtered out, the
-// hook calls Next again internally so the caller's enumeration loop continues
-// correctly without seeing spurious empty results mid-stream.
-// ===========================================================================
-
+// PnP Name + DeviceID filter hook.
 static const wchar_t* kPnPNameSubstrings[] = {
     L"82801FB", L"82441FX", L"82371SB", L"OpenHCD", L"VBOX"
 };
 static const ULONG kPnPNameFilterCount =
     sizeof(kPnPNameSubstrings) / sizeof(kPnPNameSubstrings[0]);
 
-// Exact DeviceID values to suppress.
 static const wchar_t* kPnPDeviceIdFilters[] = {
     L"PCI\\VEN_80EE&DEV_CAFE"
 };
 static const ULONG kPnPDeviceIdFilterCount =
     sizeof(kPnPDeviceIdFilters) / sizeof(kPnPDeviceIdFilters[0]);
 
-static FnNext  g_pOrigNextFilter = nullptr;
-static LPVOID  g_pFilterTarget   = nullptr;
-
-// ---------------------------------------------------------------------------
-// ShouldFilterPnPObject
-//
-// Returns true (and sets outReason) when the object should be suppressed:
-//   - Name property contains a known VM-indicator substring, OR
-//   - DeviceID property exactly matches a known VM device ID.
-//
-// Properties absent from the result set (partial SELECT) are silently skipped.
-// ---------------------------------------------------------------------------
 static bool ShouldFilterPnPObject(IWbemClassObject* pObj, std::wstring& outReason)
 {
-    // Check Name substrings.
     VARIANT vtName;
     VariantInit(&vtName);
     if (SUCCEEDED(pObj->Get(L"Name", 0, &vtName, nullptr, nullptr)) &&
@@ -245,7 +330,6 @@ static bool ShouldFilterPnPObject(IWbemClassObject* pObj, std::wstring& outReaso
     }
     VariantClear(&vtName);
 
-    // Check DeviceID exact matches.
     VARIANT vtId;
     VariantInit(&vtId);
     if (SUCCEEDED(pObj->Get(L"DeviceID", 0, &vtId, nullptr, nullptr)) &&
@@ -262,11 +346,10 @@ static bool ShouldFilterPnPObject(IWbemClassObject* pObj, std::wstring& outReaso
         }
     }
     VariantClear(&vtId);
-
     return false;
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_Next_FilterPnP(
+HRESULT STDMETHODCALLTYPE Hook_Next_FilterPnP(
     IEnumWbemClassObject* pThis,
     LONG                  lTimeout,
     ULONG                 uCount,
@@ -281,7 +364,32 @@ static HRESULT STDMETHODCALLTYPE Hook_Next_FilterPnP(
         hr = g_pOrigNextFilter(pThis, lTimeout, uCount, apObjects, &got);
         if (FAILED(hr) || got == 0)
         {
+            // Non-empty fallback: if this enumerator was tagged by
+            // Hook_ExecQuery as a critical class and has not yet
+            // surrendered any real or synthetic object, give the caller
+            // exactly one fake row.  We inject on either WBEM_S_FALSE
+            // (the empty-success path used by root\CIMV2 providers) AND
+            // on FAILED hr (root\WMI providers like the ACPI thermal
+            // zone often return WBEM_E_NOT_SUPPORTED / E_PROVIDER_*
+            // when the class is empty or unavailable).  al-khaser-style
+            // probes look at uReturn only, never at hr, so masking the
+            // underlying error with WBEM_S_NO_ERROR is safe.
+            if (got == 0 && uCount >= 1 && apObjects)
+            {
+                std::wstring cls = ClaimInjectionSlot(pThis);
+                if (!cls.empty())
+                {
+                    apObjects[0] = new FakeWbemObject(cls);
+                    if (puReturned) *puReturned = 1;
+                    WMIHOOK_INFO(L"FilterPnP: injected fake " + cls +
+                                 L" instance (hr=0x" +
+                                 std::to_wstring((unsigned long)hr) + L")");
+                    return WBEM_S_NO_ERROR;
+                }
+            }
+
             if (puReturned) *puReturned = 0;
+            WMIHOOK_INFO(L"Next hooked, returned 0 objects");
             return hr;
         }
 
@@ -297,373 +405,25 @@ static HRESULT STDMETHODCALLTYPE Hook_Next_FilterPnP(
             }
             else
             {
-                apObjects[out++] = pObj;  // pack kept objects to front
+                apObjects[out++] = pObj;
             }
         }
-    } while (out == 0);  // entire batch filtered — fetch next batch
+    } while (out == 0);
+
+    // Real objects flowed through — block any later injection on this
+    // enumerator regardless of what subsequent Next calls return.
+    MarkEnumYieldedReal(pThis);
 
     if (puReturned) *puReturned = out;
+    WMIHOOK_INFO(L"Next hooked, returned " + std::to_wstring(out) + L" objects");
     return hr;
 }
 
-// ---------------------------------------------------------------------------
-// HookEnumeratorNext_FilterPnPName
-// ---------------------------------------------------------------------------
-bool HookEnumeratorNext_FilterPnPName(IEnumWbemClassObject* pEnum)
-{
-    if (!pEnum)
-    {
-        WMIHOOK_ERROR(L"HookEnumeratorNext_FilterPnPName: pEnum is null");
-        return false;
-    }
+// Per-class spoofing helpers — same rules as the previous per-class detours.
+namespace {
 
-    void** vtbl      = *reinterpret_cast<void***>(pEnum);
-    g_pFilterTarget  = vtbl[kVtblSlot_Next];
-
-    MH_STATUS st = MH_Initialize();
-    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED)
-    {
-        WMIHOOK_ERROR(L"HookEnumeratorNext_FilterPnPName: MH_Initialize failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        return false;
-    }
-
-    st = MH_CreateHook(g_pFilterTarget,
-                       reinterpret_cast<LPVOID>(&Hook_Next_FilterPnP),
-                       reinterpret_cast<LPVOID*>(&g_pOrigNextFilter));
-    if (st != MH_OK)
-    {
-        WMIHOOK_ERROR(L"HookEnumeratorNext_FilterPnPName: MH_CreateHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pFilterTarget = nullptr;
-        return false;
-    }
-
-    st = MH_EnableHook(g_pFilterTarget);
-    if (st != MH_OK)
-    {
-        MH_RemoveHook(g_pFilterTarget);
-        WMIHOOK_ERROR(L"HookEnumeratorNext_FilterPnPName: MH_EnableHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pFilterTarget = nullptr;
-        return false;
-    }
-
-    uintptr_t addr = reinterpret_cast<uintptr_t>(g_pFilterTarget);
-    std::wstring hex(16, L'0');
-    for (int i = 15; i >= 0; --i, addr >>= 4)
-        hex[i] = L"0123456789ABCDEF"[addr & 0xF];
-    WMIHOOK_INFO(L"HookEnumeratorNext_FilterPnPName: installed at 0x" + hex);
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// UnhookEnumeratorNext_FilterPnPName
-// ---------------------------------------------------------------------------
-void UnhookEnumeratorNext_FilterPnPName()
-{
-    if (!g_pFilterTarget) return;
-
-    MH_DisableHook(g_pFilterTarget);
-    MH_RemoveHook(g_pFilterTarget);
-    MH_Uninitialize();
-
-    WMIHOOK_INFO(L"UnhookEnumeratorNext_FilterPnPName: hook removed");
-    g_pFilterTarget   = nullptr;
-    g_pOrigNextFilter = nullptr;
-}
-
-// ===========================================================================
-// Win32_BaseBoard Get hook
-//
-// IWbemClassObject vtable layout (x64, MSVC COM ABI):
-//
-//  slot  method
-//   0    IUnknown::QueryInterface
-//   1    IUnknown::AddRef
-//   2    IUnknown::Release
-//   3    IWbemClassObject::GetQualifierSet
-//   4    IWbemClassObject::Get              <-- hook target
-//   5    IWbemClassObject::Put
-//   ...
-//
-// The hook intercepts Get and substitutes values only when __CLASS is
-// "Win32_BaseBoard".  __CLASS is a WMI system property always present on
-// every object regardless of which properties were SELECTed.
-// The original Get is used (a) for the __CLASS check and (b) for all other
-// property names, so there is no recursion.
-// ===========================================================================
-
-static const int kVtblSlot_WbemGet = 4;
-
-typedef HRESULT (STDMETHODCALLTYPE *FnWbemGet)(
-    IWbemClassObject* pThis,
-    LPCWSTR           wszName,
-    LONG              lFlags,
-    VARIANT*          pVal,
-    CIMTYPE*          pType,
-    LONG*             plFlavor);
-
-static FnWbemGet  g_pOrigWbemGet   = nullptr;
-static LPVOID     g_pWbemGetTarget = nullptr;
-
-static HRESULT STDMETHODCALLTYPE Hook_WbemGet(
-    IWbemClassObject* pThis,
-    LPCWSTR           wszName,
-    LONG              lFlags,
-    VARIANT*          pVal,
-    CIMTYPE*          pType,
-    LONG*             plFlavor)
-{
-    // Determine object class via original Get — no recursion.
-    bool isBaseBoard = false;
-    VARIANT vtClass;
-    VariantInit(&vtClass);
-    if (SUCCEEDED(g_pOrigWbemGet(pThis, L"__CLASS", 0, &vtClass, nullptr, nullptr)) &&
-        vtClass.vt == VT_BSTR && vtClass.bstrVal)
-    {
-        isBaseBoard = (wcscmp(vtClass.bstrVal, L"Win32_BaseBoard") == 0);
-    }
-    VariantClear(&vtClass);
-
-    if (isBaseBoard && wszName)
-    {
-        const wchar_t* spoof = nullptr;
-        if (wcscmp(wszName, L"Product") == 0)
-            spoof = L"Standard PC";
-        else if (wcscmp(wszName, L"Manufacturer") == 0)
-            spoof = L"Microsoft Corporation";
-
-        if (spoof)
-        {
-            if (pVal)
-            {
-                VariantInit(pVal);
-                pVal->vt      = VT_BSTR;
-                pVal->bstrVal = SysAllocString(spoof);
-            }
-            if (pType)    *pType    = CIM_STRING;
-            if (plFlavor) *plFlavor = 0;
-            WMIHOOK_INFO(std::wstring(L"BaseBoardGet: spoofed ") + wszName +
-                         L" -> '" + spoof + L"'");
-            return S_OK;
-        }
-    }
-
-    return g_pOrigWbemGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
-}
-
-// ---------------------------------------------------------------------------
-// HookBaseBoardGet
-// ---------------------------------------------------------------------------
-bool HookBaseBoardGet(IWbemClassObject* pObj)
-{
-    if (!pObj)
-    {
-        WMIHOOK_ERROR(L"HookBaseBoardGet: pObj is null");
-        return false;
-    }
-
-    void** vtbl        = *reinterpret_cast<void***>(pObj);
-    g_pWbemGetTarget   = vtbl[kVtblSlot_WbemGet];
-
-    MH_STATUS st = MH_Initialize();
-    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED)
-    {
-        WMIHOOK_ERROR(L"HookBaseBoardGet: MH_Initialize failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        return false;
-    }
-
-    st = MH_CreateHook(g_pWbemGetTarget,
-                       reinterpret_cast<LPVOID>(&Hook_WbemGet),
-                       reinterpret_cast<LPVOID*>(&g_pOrigWbemGet));
-    if (st != MH_OK)
-    {
-        WMIHOOK_ERROR(L"HookBaseBoardGet: MH_CreateHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pWbemGetTarget = nullptr;
-        return false;
-    }
-
-    st = MH_EnableHook(g_pWbemGetTarget);
-    if (st != MH_OK)
-    {
-        MH_RemoveHook(g_pWbemGetTarget);
-        WMIHOOK_ERROR(L"HookBaseBoardGet: MH_EnableHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pWbemGetTarget = nullptr;
-        return false;
-    }
-
-    uintptr_t addr = reinterpret_cast<uintptr_t>(g_pWbemGetTarget);
-    std::wstring hex(16, L'0');
-    for (int i = 15; i >= 0; --i, addr >>= 4)
-        hex[i] = L"0123456789ABCDEF"[addr & 0xF];
-    WMIHOOK_INFO(L"HookBaseBoardGet: installed at 0x" + hex);
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// UnhookBaseBoardGet
-// ---------------------------------------------------------------------------
-void UnhookBaseBoardGet()
-{
-    if (!g_pWbemGetTarget) return;
-
-    MH_DisableHook(g_pWbemGetTarget);
-    MH_RemoveHook(g_pWbemGetTarget);
-    MH_Uninitialize();
-
-    WMIHOOK_INFO(L"UnhookBaseBoardGet: hook removed");
-    g_pWbemGetTarget = nullptr;
-    g_pOrigWbemGet   = nullptr;
-}
-
-// ===========================================================================
-// Win32_Bus Get hook
-//
-// Intercepts IWbemClassObject::Get (same vtable slot 4) for Win32_Bus
-// objects. For the "Name" property, calls the original Get first, then
-// replaces the exact VM-indicator substrings so detection routines that
-// search for "ACPIBus_BUS_0" / "PCI_BUS_0" / "PNP_BUS_0" find nothing.
-// ===========================================================================
-
-struct BusNameRemap { const wchar_t* from; const wchar_t* to; };
-
-static const BusNameRemap kBusRemap[] = {
-    { L"ACPIBus_BUS_0", L"ACPIBus_BUS_1" },
-    { L"PCI_BUS_0",     L"PCI_BUS_1"     },
-    { L"PNP_BUS_0",     L"PNP_BUS_1"     },
-};
-static const ULONG kBusRemapCount = sizeof(kBusRemap) / sizeof(kBusRemap[0]);
-
-static FnWbemGet  g_pOrigBusGet   = nullptr;
-static LPVOID     g_pBusGetTarget = nullptr;
-
-static HRESULT STDMETHODCALLTYPE Hook_BusGet(
-    IWbemClassObject* pThis,
-    LPCWSTR           wszName,
-    LONG              lFlags,
-    VARIANT*          pVal,
-    CIMTYPE*          pType,
-    LONG*             plFlavor)
-{
-    // Class check via original Get — no recursion.
-    bool isBus = false;
-    VARIANT vtClass;
-    VariantInit(&vtClass);
-    if (SUCCEEDED(g_pOrigBusGet(pThis, L"__CLASS", 0, &vtClass, nullptr, nullptr)) &&
-        vtClass.vt == VT_BSTR && vtClass.bstrVal)
-    {
-        isBus = (wcscmp(vtClass.bstrVal, L"Win32_Bus") == 0);
-    }
-    VariantClear(&vtClass);
-
-    if (isBus && wszName && wcscmp(wszName, L"Name") == 0)
-    {
-        // Get the real Name first.
-        HRESULT hr = g_pOrigBusGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
-        if (SUCCEEDED(hr) && pVal && pVal->vt == VT_BSTR && pVal->bstrVal)
-        {
-            std::wstring name = pVal->bstrVal;
-            for (ULONG k = 0; k < kBusRemapCount; ++k)
-            {
-                size_t pos = name.find(kBusRemap[k].from);
-                if (pos != std::wstring::npos)
-                {
-                    name.replace(pos, wcslen(kBusRemap[k].from), kBusRemap[k].to);
-                    SysFreeString(pVal->bstrVal);
-                    pVal->bstrVal = SysAllocString(name.c_str());
-                    WMIHOOK_INFO(std::wstring(L"BusGet: masked '") +
-                                 kBusRemap[k].from + L"' -> '" + kBusRemap[k].to + L"'");
-                    break;
-                }
-            }
-        }
-        return hr;
-    }
-
-    return g_pOrigBusGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
-}
-
-// ---------------------------------------------------------------------------
-// HookBusGet
-// ---------------------------------------------------------------------------
-bool HookBusGet(IWbemClassObject* pObj)
-{
-    if (!pObj)
-    {
-        WMIHOOK_ERROR(L"HookBusGet: pObj is null");
-        return false;
-    }
-
-    void** vtbl       = *reinterpret_cast<void***>(pObj);
-    g_pBusGetTarget   = vtbl[kVtblSlot_WbemGet];
-
-    MH_STATUS st = MH_Initialize();
-    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED)
-    {
-        WMIHOOK_ERROR(L"HookBusGet: MH_Initialize failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        return false;
-    }
-
-    st = MH_CreateHook(g_pBusGetTarget,
-                       reinterpret_cast<LPVOID>(&Hook_BusGet),
-                       reinterpret_cast<LPVOID*>(&g_pOrigBusGet));
-    if (st != MH_OK)
-    {
-        WMIHOOK_ERROR(L"HookBusGet: MH_CreateHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pBusGetTarget = nullptr;
-        return false;
-    }
-
-    st = MH_EnableHook(g_pBusGetTarget);
-    if (st != MH_OK)
-    {
-        MH_RemoveHook(g_pBusGetTarget);
-        WMIHOOK_ERROR(L"HookBusGet: MH_EnableHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pBusGetTarget = nullptr;
-        return false;
-    }
-
-    uintptr_t addr = reinterpret_cast<uintptr_t>(g_pBusGetTarget);
-    std::wstring hex(16, L'0');
-    for (int i = 15; i >= 0; --i, addr >>= 4)
-        hex[i] = L"0123456789ABCDEF"[addr & 0xF];
-    WMIHOOK_INFO(L"HookBusGet: installed at 0x" + hex);
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// UnhookBusGet
-// ---------------------------------------------------------------------------
-void UnhookBusGet()
-{
-    if (!g_pBusGetTarget) return;
-
-    MH_DisableHook(g_pBusGetTarget);
-    MH_RemoveHook(g_pBusGetTarget);
-    MH_Uninitialize();
-
-    WMIHOOK_INFO(L"UnhookBusGet: hook removed");
-    g_pBusGetTarget = nullptr;
-    g_pOrigBusGet   = nullptr;
-}
-
-// ===========================================================================
-// Win32_PnPDevice Get hook
-//
-// Intercepts IWbemClassObject::Get (vtable slot 4) for Win32_PnPDevice
-// objects. For Name, Caption, and PNPDeviceID properties, replaces
-// "VEN_VBOX" with "VEN_GENERIC" and remaining "VBOX" with "Generic" so
-// substring searches for those tokens find nothing.
-// ===========================================================================
-
-static std::wstring MaskVboxString(const std::wstring& s)
+// VEN_VBOX → VEN_GENERIC, then any remaining VBOX → Generic.
+std::wstring MaskVboxString(const std::wstring& s)
 {
     struct { const wchar_t* f; const wchar_t* t; } patches[] = {
         { L"VEN_VBOX", L"VEN_GENERIC" },
@@ -682,16 +442,25 @@ static std::wstring MaskVboxString(const std::wstring& s)
     return r;
 }
 
-static const wchar_t* kPnPDevPropsToMask[] = {
-    L"Name", L"Caption", L"PNPDeviceID"
-};
-static const ULONG kPnPDevPropCount =
-    sizeof(kPnPDevPropsToMask) / sizeof(kPnPDevPropsToMask[0]);
+void SetBstrResult(VARIANT* pVal, CIMTYPE* pType, LONG* plFlavor,
+                   const wchar_t* spoof)
+{
+    if (pVal)
+    {
+        VariantInit(pVal);
+        pVal->vt      = VT_BSTR;
+        pVal->bstrVal = SysAllocString(spoof);
+    }
+    if (pType)    *pType    = CIM_STRING;
+    if (plFlavor) *plFlavor = 0;
+}
 
-static FnWbemGet  g_pOrigPnPDevGet   = nullptr;
-static LPVOID     g_pPnPDevGetTarget = nullptr;
-
-static HRESULT STDMETHODCALLTYPE Hook_PnPDeviceGet(
+// Hook_DispatcherGet — single shared IWbemClassObject::Get detour.
+//
+// Reads __CLASS via the original Get (no recursion), then runs a per-class
+// block when the matching enable flag is set.  Unhandled / disabled paths
+// fall through to the original Get unchanged.
+HRESULT STDMETHODCALLTYPE Hook_DispatcherGet(
     IWbemClassObject* pThis,
     LPCWSTR           wszName,
     LONG              lFlags,
@@ -699,32 +468,84 @@ static HRESULT STDMETHODCALLTYPE Hook_PnPDeviceGet(
     CIMTYPE*          pType,
     LONG*             plFlavor)
 {
-    // Class check via original Get — no recursion.
-    bool isPnPDevice = false;
-    VARIANT vtClass;
-    VariantInit(&vtClass);
-    if (SUCCEEDED(g_pOrigPnPDevGet(pThis, L"__CLASS", 0, &vtClass, nullptr, nullptr)) &&
-        vtClass.vt == VT_BSTR && vtClass.bstrVal)
-    {
-        isPnPDevice = (wcscmp(vtClass.bstrVal, L"Win32_PnPDevice") == 0);
-    }
-    VariantClear(&vtClass);
+    if (!wszName)
+        return g_pOrigGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
 
-    if (isPnPDevice && wszName)
+    // Determine the object class via the ORIGINAL Get — no recursion.
+    std::wstring cls;
     {
-        bool isMaskedProp = false;
-        for (ULONG k = 0; k < kPnPDevPropCount; ++k)
+        VARIANT vtClass;
+        VariantInit(&vtClass);
+        if (SUCCEEDED(g_pOrigGet(pThis, L"__CLASS", 0, &vtClass, nullptr, nullptr)) &&
+            vtClass.vt == VT_BSTR && vtClass.bstrVal)
         {
-            if (wcscmp(wszName, kPnPDevPropsToMask[k]) == 0)
+            cls = vtClass.bstrVal;
+        }
+        VariantClear(&vtClass);
+    }
+
+    if (cls.empty())
+        return g_pOrigGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
+
+    // Win32_BaseBoard — spoof Product / Manufacturer.
+    if (g_BaseBoardEnabled && cls == L"Win32_BaseBoard")
+    {
+        const wchar_t* spoof = nullptr;
+        if (wcscmp(wszName, L"Product") == 0)
+            spoof = L"Standard PC";
+        else if (wcscmp(wszName, L"Manufacturer") == 0)
+            spoof = L"Microsoft Corporation";
+
+        if (spoof)
+        {
+            SetBstrResult(pVal, pType, plFlavor, spoof);
+            WMIHOOK_INFO(std::wstring(L"BaseBoardGet: spoofed ") + wszName +
+                         L" -> '" + spoof + L"'");
+            return S_OK;
+        }
+    }
+
+    // Win32_Bus — rewrite Name (ACPIBus_BUS_0 → _1, etc.).
+    if (g_BusEnabled && cls == L"Win32_Bus" && wcscmp(wszName, L"Name") == 0)
+    {
+        HRESULT hr = g_pOrigGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
+        if (SUCCEEDED(hr) && pVal && pVal->vt == VT_BSTR && pVal->bstrVal)
+        {
+            static const struct { const wchar_t* f; const wchar_t* t; } kBusRemap[] = {
+                { L"ACPIBus_BUS_0", L"ACPIBus_BUS_1" },
+                { L"PCI_BUS_0",     L"PCI_BUS_1"     },
+                { L"PNP_BUS_0",     L"PNP_BUS_1"     },
+            };
+            std::wstring name = pVal->bstrVal;
+            for (auto& m : kBusRemap)
             {
-                isMaskedProp = true;
-                break;
+                size_t pos = name.find(m.f);
+                if (pos != std::wstring::npos)
+                {
+                    name.replace(pos, wcslen(m.f), m.t);
+                    SysFreeString(pVal->bstrVal);
+                    pVal->bstrVal = SysAllocString(name.c_str());
+                    WMIHOOK_INFO(std::wstring(L"BusGet: masked '") + m.f +
+                                 L"' -> '" + m.t + L"'");
+                    break;
+                }
             }
         }
+        return hr;
+    }
 
-        if (isMaskedProp)
+
+    // Win32_PnPDevice — mask VBOX in Name/Caption/PNPDeviceID.
+    if (g_PnPDeviceEnabled && cls == L"Win32_PnPDevice")
+    {
+        static const wchar_t* kPnPDevProps[] = { L"Name", L"Caption", L"PNPDeviceID" };
+        bool match = false;
+        for (auto p : kPnPDevProps)
+            if (wcscmp(wszName, p) == 0) { match = true; break; }
+
+        if (match)
         {
-            HRESULT hr = g_pOrigPnPDevGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
+            HRESULT hr = g_pOrigGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
             if (SUCCEEDED(hr) && pVal && pVal->vt == VT_BSTR && pVal->bstrVal &&
                 wcsstr(pVal->bstrVal, L"VBOX") != nullptr)
             {
@@ -738,72 +559,157 @@ static HRESULT STDMETHODCALLTYPE Hook_PnPDeviceGet(
         }
     }
 
-    return g_pOrigPnPDevGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
+
+    // Win32_BIOS — spoof SerialNumber to a value that does not match
+    if (g_BiosEnabled && cls == L"Win32_BIOS" &&
+        wcscmp(wszName, L"SerialNumber") == 0)
+    {
+        SetBstrResult(pVal, pType, plFlavor, L"System Serial");
+        WMIHOOK_INFO(L"BiosGet: spoofed SerialNumber -> 'System Serial'");
+        return S_OK;
+    }
+
+    // Win32_ComputerSystem — spoof Model / Manufacturer.
+    if (g_ComputerSystemEnabled && cls == L"Win32_ComputerSystem")
+    {
+        const wchar_t* spoof = nullptr;
+        if (wcscmp(wszName, L"Model") == 0)
+            spoof = L"Standard PC";
+        else if (wcscmp(wszName, L"Manufacturer") == 0)
+            spoof = L"Microsoft Corporation";
+
+        if (spoof)
+        {
+            SetBstrResult(pVal, pType, plFlavor, spoof);
+            WMIHOOK_INFO(std::wstring(L"ComputerSystemGet: spoofed ") + wszName +
+                         L" -> '" + spoof + L"'");
+            return S_OK;
+        }
+    }
+
+    // Win32_VideoController — spoof Caption.
+    if (g_VideoEnabled && cls == L"Win32_VideoController" &&
+        wcscmp(wszName, L"Caption") == 0)
+    {
+        SetBstrResult(pVal, pType, plFlavor, L"Generic VGA");
+        WMIHOOK_INFO(L"VideoGet: spoofed Caption -> 'Generic VGA'");
+        return S_OK;
+    }
+
+    // Win32_Processor — spoof NumberOfCores (must be >= 2) and
+    // ProcessorId (must not be NULL).  WMI normally hands uint32
+    // properties back as VT_I4; the al-khaser-style check reads them
+    // via vtProp.uintVal which shares storage with lVal in the VARIANT
+    // union, so writing lVal = 4 is read back as 4 either way.
+    if (g_ProcessorEnabled && cls == L"Win32_Processor")
+    {
+        if (wcscmp(wszName, L"NumberOfCores") == 0)
+        {
+            if (pVal)
+            {
+                VariantInit(pVal);
+                pVal->vt   = VT_I4;
+                pVal->lVal = 4;
+            }
+            if (pType)    *pType    = CIM_UINT32;
+            if (plFlavor) *plFlavor = 0;
+            WMIHOOK_INFO(L"ProcessorGet: spoofed NumberOfCores -> 4");
+            return S_OK;
+        }
+        if (wcscmp(wszName, L"ProcessorId") == 0)
+        {
+            SetBstrResult(pVal, pType, plFlavor, L"BFEBFBFF000906E9");
+            WMIHOOK_INFO(L"ProcessorGet: spoofed ProcessorId -> 'BFEBFBFF000906E9'");
+            return S_OK;
+        }
+    }
+
+    // Win32_LogicalDisk — spoof Size (BSTR; al-khaser parses it via
+    // _wcstoui64 and fails the probe if the result is below 80 GB).
+    // 128_000_000_000 ≈ 119.2 GiB — comfortably above the threshold
+    // regardless of whether the detector uses GB or GiB.
+    if (g_LogicalDiskEnabled && cls == L"Win32_LogicalDisk" &&
+        wcscmp(wszName, L"Size") == 0)
+    {
+        SetBstrResult(pVal, pType, plFlavor, L"128000000000");
+        WMIHOOK_INFO(L"LogicalDiskGet: spoofed Size -> '128000000000'");
+        return S_OK;
+    }
+
+    // MSAcpi_ThermalZoneTemperature (root\WMI namespace) — spoof
+    // CurrentTemperature for the case where the real WMI provider does
+    // return a row.  The "empty result" case is covered separately by
+    // the critical-class fake injection in Hook_Next_FilterPnP.
+    if (g_ThermalEnabled && cls == L"MSAcpi_ThermalZoneTemperature" &&
+        wcscmp(wszName, L"CurrentTemperature") == 0)
+    {
+        if (pVal)
+        {
+            VariantInit(pVal);
+            pVal->vt   = VT_I4;
+            pVal->lVal = 300;
+        }
+        if (pType)    *pType    = CIM_UINT32;
+        if (plFlavor) *plFlavor = 0;
+        WMIHOOK_INFO(L"ThermalGet: spoofed CurrentTemperature -> 300");
+        return S_OK;
+    }
+
+    // Win32_NTEventlogFile.Sources — rewrite VBox-named event log
+    // sources (vboxvideo / VBoxVideoW8 / VBoxWddm / VBoxSF /
+    // VBoxMouse / VBoxGuest) inside the returned SAFEARRAY of BSTR in
+    // place.  Any matching entry becomes "Generic", which doesn't
+    // collide with the al-khaser source list.
+    if (g_EventLogEnabled && cls == L"Win32_NTEventlogFile" &&
+        wcscmp(wszName, L"Sources") == 0)
+    {
+        HRESULT hr = g_pOrigGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
+        if (SUCCEEDED(hr) && pVal &&
+            pVal->vt == (VT_BSTR | VT_ARRAY) && pVal->parray)
+        {
+            static const wchar_t* kVBoxSources[] = {
+                L"vboxvideo", L"VBoxVideoW8", L"VBoxWddm",
+                L"VBoxSF",    L"VBoxMouse",   L"VBoxGuest",
+                L"VBoxService"
+            };
+
+            SAFEARRAY* sa = pVal->parray;
+            BSTR* items = nullptr;
+            if (SUCCEEDED(SafeArrayAccessData(sa, (void**)&items)))
+            {
+                LONG lo = 0, hi = 0;
+                SafeArrayGetLBound(sa, 1, &lo);
+                SafeArrayGetUBound(sa, 1, &hi);
+                ULONG masked = 0;
+                for (LONG i = lo; i <= hi; ++i)
+                {
+                    if (!items[i]) continue;
+                    bool match = false;
+                    for (auto pat : kVBoxSources)
+                    {
+                        if (_wcsicmp(items[i], pat) == 0) { match = true; break; }
+                    }
+                    if (match)
+                    {
+                        SysFreeString(items[i]);
+                        items[i] = SysAllocString(L"Generic");
+                        ++masked;
+                    }
+                }
+                SafeArrayUnaccessData(sa);
+                if (masked)
+                {
+                    WMIHOOK_INFO(L"EventLogGet: masked " +
+                                 std::to_wstring(masked) +
+                                 L" VBox source(s) in Sources[]");
+                }
+            }
+        }
+        return hr;
+    }
+
+    // Fall-through: unmodified original call.
+    return g_pOrigGet(pThis, wszName, lFlags, pVal, pType, plFlavor);
 }
 
-// ---------------------------------------------------------------------------
-// HookPnPDeviceGet
-// ---------------------------------------------------------------------------
-bool HookPnPDeviceGet(IWbemClassObject* pObj)
-{
-    if (!pObj)
-    {
-        WMIHOOK_ERROR(L"HookPnPDeviceGet: pObj is null");
-        return false;
-    }
-
-    void** vtbl          = *reinterpret_cast<void***>(pObj);
-    g_pPnPDevGetTarget   = vtbl[kVtblSlot_WbemGet];
-
-    MH_STATUS st = MH_Initialize();
-    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED)
-    {
-        WMIHOOK_ERROR(L"HookPnPDeviceGet: MH_Initialize failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        return false;
-    }
-
-    st = MH_CreateHook(g_pPnPDevGetTarget,
-                       reinterpret_cast<LPVOID>(&Hook_PnPDeviceGet),
-                       reinterpret_cast<LPVOID*>(&g_pOrigPnPDevGet));
-    if (st != MH_OK)
-    {
-        WMIHOOK_ERROR(L"HookPnPDeviceGet: MH_CreateHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pPnPDevGetTarget = nullptr;
-        return false;
-    }
-
-    st = MH_EnableHook(g_pPnPDevGetTarget);
-    if (st != MH_OK)
-    {
-        MH_RemoveHook(g_pPnPDevGetTarget);
-        WMIHOOK_ERROR(L"HookPnPDeviceGet: MH_EnableHook failed, st=" +
-                      std::to_wstring(static_cast<int>(st)));
-        g_pPnPDevGetTarget = nullptr;
-        return false;
-    }
-
-    uintptr_t addr = reinterpret_cast<uintptr_t>(g_pPnPDevGetTarget);
-    std::wstring hex(16, L'0');
-    for (int i = 15; i >= 0; --i, addr >>= 4)
-        hex[i] = L"0123456789ABCDEF"[addr & 0xF];
-    WMIHOOK_INFO(L"HookPnPDeviceGet: installed at 0x" + hex);
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// UnhookPnPDeviceGet
-// ---------------------------------------------------------------------------
-void UnhookPnPDeviceGet()
-{
-    if (!g_pPnPDevGetTarget) return;
-
-    MH_DisableHook(g_pPnPDevGetTarget);
-    MH_RemoveHook(g_pPnPDevGetTarget);
-    MH_Uninitialize();
-
-    WMIHOOK_INFO(L"UnhookPnPDeviceGet: hook removed");
-    g_pPnPDevGetTarget = nullptr;
-    g_pOrigPnPDevGet   = nullptr;
-}
+} // namespace WmiMaskHooks

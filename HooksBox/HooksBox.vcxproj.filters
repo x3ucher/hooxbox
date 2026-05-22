@@ -63,6 +63,15 @@
     <ClInclude Include="hooks\system_hooks.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="hooks\wmi_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\power_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\services_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="filters\vbox_filters.cpp">
@@ -108,6 +117,15 @@
       <Filter>Исходные файлы</Filter>
     </ClCompile>
     <ClCompile Include="hooks\system_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\wmi_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\power_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\services_hooks.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
   </ItemGroup>

@@ -5,71 +5,96 @@
 #include <wbemidl.h>
 #include <string>
 
-namespace WmiHooks {
-    // Appends a UTF-8 log entry to sandbox_evasion.log in the process working dir.
-    // Thread-safe.
-    void Log(const wchar_t* level, const std::wstring& msg);
-}
+#include "log_utils.h"
 
-#define WMIHOOK_INFO(msg)  WmiHooks::Log(L"INFO",  (msg))
-#define WMIHOOK_WARN(msg)  WmiHooks::Log(L"WARN",  (msg))
-#define WMIHOOK_ERROR(msg) WmiHooks::Log(L"ERROR", (msg))
+// File-logger macros used inside the WMI detours.
+#define WMIHOOK_INFO(msg)  WriteFileLog(L"INFO",  (msg))
+#define WMIHOOK_WARN(msg)  WriteFileLog(L"WARN",  (msg))
+#define WMIHOOK_ERROR(msg) WriteFileLog(L"ERROR", (msg))
 
-// Installs a MinHook detour on IEnumWbemClassObject::Next (vtable slot 4).
-// The hook calls the original Next, then logs the return count via WMIHOOK_INFO.
-// The hook applies to all enumerators sharing the same vtable.
-// Returns false if pEnum is null or any MinHook call fails.
-bool HookEnumeratorNext(IEnumWbemClassObject* pEnum);
+// ---------------------------------------------------------------------------
+// IEnumWbemClassObject vtable: [4] Next.
+// IWbemClassObject   vtable: [4] Get.
+// ---------------------------------------------------------------------------
+namespace WmiMaskHooks {
 
-// Removes the hook installed by HookEnumeratorNext and uninitialises MinHook.
-void UnhookEnumeratorNext();
+constexpr int kVtblSlot_Next      = 4;
+constexpr int kVtblSlot_WbemGet   = 4;
+constexpr int kVtblSlot_ExecQuery = 20;   // IWbemServices::ExecQuery
 
-// Installs a filtering detour on IEnumWbemClassObject::Next (vtable slot 4).
-// After each original Next call, inspects the Name property of every returned
-// object. Objects whose Name contains any of the VM-indicator substrings
-// ("82801FB", "82441FX", "82371SB", "OpenHCD", "VBOX") are released and
-// removed from the output array. The hook retries internally until at least
-// one unfiltered object is available or the enumerator is exhausted, so the
-// caller's loop terminates correctly even when all objects are filtered.
-// Returns false if pEnum is null or any MinHook call fails.
-bool HookEnumeratorNext_FilterPnPName(IEnumWbemClassObject* pEnum);
+typedef HRESULT (STDMETHODCALLTYPE *FnNext)(
+    IEnumWbemClassObject* pThis,
+    LONG                  lTimeout,
+    ULONG                 uCount,
+    IWbemClassObject**    apObjects,
+    ULONG*                puReturned);
 
-// Removes the hook installed by HookEnumeratorNext_FilterPnPName.
-void UnhookEnumeratorNext_FilterPnPName();
+typedef HRESULT (STDMETHODCALLTYPE *FnWbemGet)(
+    IWbemClassObject* pThis,
+    LPCWSTR           wszName,
+    LONG              lFlags,
+    VARIANT*          pVal,
+    CIMTYPE*          pType,
+    LONG*             plFlavor);
 
-// Installs a MinHook detour on IWbemClassObject::Get (vtable slot 4).
-// The detour intercepts Get calls for the "Product" and "Manufacturer"
-// properties and returns spoofed values only when the object's __CLASS is
-// "Win32_BaseBoard"; all other properties and all other classes pass through
-// to the original Get unchanged.
-// pObj must be a live Win32_BaseBoard IWbemClassObject (used to locate the
-// function address from the vtable; the hook survives its release).
-// Returns false if pObj is null or any MinHook call fails.
-bool HookBaseBoardGet(IWbemClassObject* pObj);
+typedef HRESULT (STDMETHODCALLTYPE *FnExecQuery)(
+    IWbemServices*         pThis,
+    BSTR                   strQueryLanguage,
+    BSTR                   strQuery,
+    LONG                   lFlags,
+    IWbemContext*          pCtx,
+    IEnumWbemClassObject** ppEnum);
 
-// Removes the hook installed by HookBaseBoardGet and uninitialises MinHook.
-void UnhookBaseBoardGet();
+// Original-function pointers.  Populated by hook_manager on install,
+// read by the detours below.  All IWbemClassObject Get-detours share a
+// single trampoline because the WMI proxies use one common vtable for
+// every class in ROOT\CIMV2 — so MinHook can only patch Get at one
+// address, and per-class behaviour is multiplexed by Hook_DispatcherGet
+// using the enable flags below.
+extern FnNext       g_pOrigNext;
+extern FnNext       g_pOrigNextFilter;
+extern FnWbemGet    g_pOrigGet;
+extern FnExecQuery  g_pOrigExecQuery;
 
-// Installs a MinHook detour on IWbemClassObject::Get (vtable slot 4) for
-// Win32_Bus objects.  When the "Name" property is requested, the hook
-// replaces the known VirtualBox bus names with neutral variants:
-//   ACPIBus_BUS_0 -> ACPIBus_BUS_1
-//   PCI_BUS_0     -> PCI_BUS_1
-//   PNP_BUS_0     -> PNP_BUS_1
-// This breaks the detection condition (count==3 && findCount==3).
-// pObj must be a live Win32_Bus IWbemClassObject used to locate Get from
-// the vtable; the hook survives its release.
-bool HookBusGet(IWbemClassObject* pObj);
+// Per-class spoofing flags.  Set/cleared by the corresponding
+// Install*Hook / Remove*Hook functions in hook_manager; the dispatcher
+// reads them on every Get call.
+extern bool g_BaseBoardEnabled;
+extern bool g_BusEnabled;
+extern bool g_PnPDeviceEnabled;
+extern bool g_BiosEnabled;
+extern bool g_ComputerSystemEnabled;
+extern bool g_VideoEnabled;
+extern bool g_ProcessorEnabled;
+extern bool g_LogicalDiskEnabled;
+extern bool g_ThermalEnabled;
+extern bool g_EventLogEnabled;
 
-// Removes the hook installed by HookBusGet and uninitialises MinHook.
-void UnhookBusGet();
+// Non-empty injection master switch.  When true and ExecQuery returned
+// an enumerator whose target class is in the critical list, the first
+// Next that would yield 0 objects instead gets a synthetic
+// IWbemClassObject — defeats "class is empty == VM" sandbox probes.
+extern bool g_NonEmptyEnabled;
 
-// Installs a MinHook detour on IWbemClassObject::Get (vtable slot 4) for
-// Win32_PnPDevice objects.  For the Name, Caption, and PNPDeviceID properties,
-// all occurrences of "VEN_VBOX" are replaced with "VEN_GENERIC" and all
-// occurrences of "VBOX" are replaced with "Generic".  All other properties
-// and all other classes pass through to the original Get unchanged.
-bool HookPnPDeviceGet(IWbemClassObject* pObj);
+// Detours.
+HRESULT STDMETHODCALLTYPE Hook_Next(
+    IEnumWbemClassObject* pThis, LONG lTimeout, ULONG uCount,
+    IWbemClassObject** apObjects, ULONG* puReturned);
 
-// Removes the hook installed by HookPnPDeviceGet and uninitialises MinHook.
-void UnhookPnPDeviceGet();
+HRESULT STDMETHODCALLTYPE Hook_Next_FilterPnP(
+    IEnumWbemClassObject* pThis, LONG lTimeout, ULONG uCount,
+    IWbemClassObject** apObjects, ULONG* puReturned);
+
+// Single Get-detour shared by all per-class hooks.  Dispatches on
+// IWbemClassObject::__CLASS and the per-class enable flags.
+HRESULT STDMETHODCALLTYPE Hook_DispatcherGet(
+    IWbemClassObject* pThis, LPCWSTR wszName, LONG lFlags,
+    VARIANT* pVal, CIMTYPE* pType, LONG* plFlavor);
+
+// Tags every IEnumWbemClassObject returned for a critical-class WQL
+// query so that the Next detour can supply a fake row on empty results.
+HRESULT STDMETHODCALLTYPE Hook_ExecQuery(
+    IWbemServices* pThis, BSTR strQueryLanguage, BSTR strQuery,
+    LONG lFlags, IWbemContext* pCtx, IEnumWbemClassObject** ppEnum);
+
+} // namespace WmiMaskHooks

@@ -2,23 +2,29 @@
 #include "utils/log_utils.h"
 #include "hook_manager.h"
 
-// Точка входа DLL
+// пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ DLL
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-        // Отключаем вызов DLL_THREAD_ATTACH/DETACH для оптимизации
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ DLL_THREAD_ATTACH/DETACH пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         DisableThreadLibraryCalls(hModule);
 
-        // Инициализируем хуки
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ
         if (!InitializeHooks()) {
             DebugPrint("[HOOK_DLL] Failed to initialize hooks");
             return FALSE;
+        }
+        // WMI hooks need a live COM session to resolve their vtable
+        // targets; do that synchronously here so they are in place
+        // before the host process resumes and runs its first WMI query.
+        if (!InstallWmiHooks()) {
+            DebugPrint("[HOOK_DLL] WMI hook install failed (continuing)");
         }
         DebugPrint("[HOOK_DLL] Injected successfully!");
         break;
 
     case DLL_PROCESS_DETACH:
-        // Отключаем хуки при выгрузке
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         CleanupHooks();
         DebugPrint("[HOOK_DLL] Unloaded successfully!");
         break;
@@ -26,7 +32,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     return TRUE;
 }
 
-// Экспортируем функцию для ручной инициализации
+// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 extern "C" __declspec(dllexport) void InitializeMyHooks() {
     InitializeHooks();
 }

@@ -9,10 +9,12 @@ static const wchar_t* VBOX_REGISTRY_PATHS[] = {
     L"VBoxSF",
     L"VBoxVideo",
     L"Oracle\\VirtualBox Guest Additions",
-    L"VBOX__"
+    L"VBOX__",
+    L"SystemBiosDate",
+    L"VideoBiosVersion"
 };
 
-static const int VBOX_REGISTRY_PATHS_COUNT = 7;
+static const int VBOX_REGISTRY_PATHS_COUNT = 9;
 
 static const wchar_t* VBOX_DISK_ENUM_CHECKS[] = {
     L"qemu",
@@ -31,10 +33,11 @@ static const wchar_t* VBOX_DRIVERS_PATHS[] = {
     L"C:\\WINDOWS\\system32\\drivers\\VBoxMouse.sys",
     L"C:\\WINDOWS\\system32\\drivers\\VBoxGuest.sys",
     L"C:\\WINDOWS\\system32\\drivers\\VBoxSF.sys",
-    L"C:\\WINDOWS\\system32\\drivers\\VBoxVideo.sys"
+    L"C:\\WINDOWS\\system32\\drivers\\VBoxVideo.sys",
+    L"C:\\WINDOWS\\system32\\drivers\\VBoxWddm.sys"
 };
 
-static const int VBOX_DRIVERS_PATHS_COUNT = 4;
+static const int VBOX_DRIVERS_PATHS_COUNT = 5;
 
 // VirtualBox other system files
 static const wchar_t* VBOX_SYSTEM_FILES_PATHS[] = {
