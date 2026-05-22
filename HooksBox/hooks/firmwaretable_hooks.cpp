@@ -23,8 +23,89 @@ DWORD WINAPI hook_GetSystemFirmwareTable(
         return HandleAcpiRequest(FirmwareTableID, pFirmwareTableBuffer, BufferSize);
     }
     else if (FirmwareTableProviderSignature == 'RSMB' || FirmwareTableProviderSignature == 0x52534D42) {
-        DebugPrint("[FIRMWARE_HOOK] Handling SMBIOS request");
-        return HandleSmbiosRequest(FirmwareTableID, pFirmwareTableBuffer, BufferSize);
+        // Pass-through + two-stage post-process:
+        //   1. Scrub any "VirtualBox" / "VBOX" / "vbox" byte-strings in
+        //      the real SMBIOS in place.
+        //   2. Inflate the table count by appending empty Type-40
+        //      structures right before the End-Of-Table marker.  VBox
+        //      guests ship with ~6-8 SMBIOS tables, which trips
+        //      al-khaser-style `number_SMBIOS_tables` thresholds; this
+        //      pushes the count comfortably above any reasonable cutoff.
+        DebugPrint("[FIRMWARE_HOOK] SMBIOS: passing through + scrubbing + inflating");
+        DWORD result = original_GetSystemFirmwareTable(
+            FirmwareTableProviderSignature,
+            FirmwareTableID,
+            pFirmwareTableBuffer,
+            BufferSize);
+
+        if (result > 0 && pFirmwareTableBuffer != NULL && result <= BufferSize) {
+            BYTE* buf = static_cast<BYTE*>(pFirmwareTableBuffer);
+
+            FilterVirtualBoxStrings(buf, result);
+
+            // ---- inflate table count ----
+            // SMBIOS layout: RawSMBIOSData header (8 bytes), then
+            // TableData of length = *(DWORD*)(buf+4).  Each structure
+            // is header(4) + formatted area(length-4) + strings section
+            // terminated by a double-null.  Type 127 marks end-of-table.
+            const int kTargetMinTables = 12;
+            DWORD tableDataLen = *reinterpret_cast<DWORD*>(buf + 4);
+            if (8 + tableDataLen > result) tableDataLen = result - 8;
+
+            BYTE* tableBegin = buf + 8;
+            BYTE* tableEnd   = tableBegin + tableDataLen;
+
+            // Locate the end-of-table marker (type 127).  Count
+            // real tables encountered along the way.
+            BYTE* p          = tableBegin;
+            BYTE* endMarker  = NULL;
+            int   realCount  = 0;
+            while (p + 4 <= tableEnd) {
+                BYTE type = p[0];
+                BYTE len  = p[1];
+                if (len < 4 || p + len > tableEnd) break;
+                BYTE* s = p + len;
+                while (s + 1 < tableEnd && !(s[0] == 0 && s[1] == 0)) ++s;
+                if (s + 1 >= tableEnd) break;
+                if (type == 127) { endMarker = p; break; }
+                ++realCount;
+                p = s + 2;
+            }
+
+            if (endMarker && realCount < kTargetMinTables) {
+                // Each dummy: 4-byte header (type=40 "Additional Information"
+                // is benign and rarely consulted) + 2-byte string-section
+                // terminator (\0\0) = 6 bytes.
+                int   need      = kTargetMinTables - realCount;
+                DWORD growBytes = static_cast<DWORD>(need * 6);
+
+                // Make sure caller-supplied buffer can hold the extra bytes.
+                if (result + growBytes <= BufferSize) {
+                    // Shift the end-of-table forward to free room.
+                    DWORD tailBytes = static_cast<DWORD>(
+                        (buf + result) - endMarker);
+                    memmove(endMarker + growBytes, endMarker, tailBytes);
+
+                    BYTE* w = endMarker;
+                    for (int i = 0; i < need; ++i) {
+                        w[0] = 40;             // SMBIOS type 40
+                        w[1] = 4;              // formatted-area length = 4 (header only)
+                        WORD handle = 0xA000 + i;
+                        w[2] = (BYTE)(handle & 0xFF);
+                        w[3] = (BYTE)(handle >> 8);
+                        w[4] = 0;              // empty strings section
+                        w[5] = 0;
+                        w += 6;
+                    }
+
+                    result += growBytes;
+                    *reinterpret_cast<DWORD*>(buf + 4) =
+                        tableDataLen + growBytes;
+                    DebugPrint("[FIRMWARE_HOOK] SMBIOS: inflated table count");
+                }
+            }
+        }
+        return result;
     }
     else if (FirmwareTableProviderSignature == 'FIRM' || FirmwareTableProviderSignature == 'RAW ') {
         DebugPrint("[FIRMWARE_HOOK] Passing through to original for signature");

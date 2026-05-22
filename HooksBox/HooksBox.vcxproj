@@ -78,6 +78,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)hooks;$(ProjectDir)filters;$(ProjectDir)utils;$(SolutionDir)tools\MinHook\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -92,6 +93,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)hooks;$(ProjectDir)filters;$(ProjectDir)utils;$(SolutionDir)tools\MinHook\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -110,7 +112,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)tools\MinHook\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libMinHook.x64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libMinHook.x64.lib;powrprof.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>$(ProjectDir)hooksbox.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
@@ -128,7 +130,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)tools\MinHook\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libMinHook.x64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libMinHook.x64.lib;powrprof.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>$(ProjectDir)hooksbox.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
@@ -145,9 +147,13 @@
     <ClInclude Include="hooks\registry_hooks.h" />
     <ClInclude Include="hooks\system_hooks.h" />
     <ClInclude Include="hooks\window_hooks.h" />
+    <ClInclude Include="hooks\wmi_hooks.h" />
+    <ClInclude Include="hooks\power_hooks.h" />
+    <ClInclude Include="hooks\services_hooks.h" />
     <ClInclude Include="hook_dll_main.h" />
     <ClInclude Include="hook_manager.h" />
     <ClInclude Include="utils\log_utils.h" />
+    <ClInclude Include="utils\WmiHelper.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="filters\vbox_filters.cpp" />
@@ -161,9 +167,13 @@
     <ClCompile Include="hooks\registry_hooks.cpp" />
     <ClCompile Include="hooks\system_hooks.cpp" />
     <ClCompile Include="hooks\window_hooks.cpp" />
+    <ClCompile Include="hooks\wmi_hooks.cpp" />
+    <ClCompile Include="hooks\power_hooks.cpp" />
+    <ClCompile Include="hooks\services_hooks.cpp" />
     <ClCompile Include="hook_dll_main.cpp" />
     <ClCompile Include="hook_manager.cpp" />
     <ClCompile Include="utils\log_utils.cpp" />
+    <ClCompile Include="utils\WmiHelper.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="hooksbox.def" />
