@@ -14,9 +14,6 @@ masking layers are shipped:
    CPUID-vendor / HV-bit / `RDTSC→CPUID→RDTSC` timing tests that no API hook
    can touch.
 
-A small validation target (`vmcheck.exe`) reproduces the pafish-style CPUID
-and timing probes so you can check the masking end-to-end.
-
 ## 🛡️ The problem
 
 Modern malware uses many independent signals to decide it is running in a
@@ -51,7 +48,6 @@ code paths cover Hyper-V, VMware, QEMU.
 - **VirtualBox artifact masking** — registry, files, processes, devices, WMI rows, MAC OUI
 - **WMI fake-row injection** — when a critical class (`Win32_Fan`, `MSAcpi_ThermalZoneTemperature`, …) returns 0 instances, a synthetic row is supplied so the "empty == VM" probe fails
 - **Instruction-level masking** via `DebuggerWrapper.exe` — CPUID and RDTSC patched and emulated
-- **Validation target** `vmcheck.exe` — reproduces pafish HV-bit / vendor-leaf / RDTSC-diff checks; reports `TRACED` or `CLEAN` per check
 - **Customizable hooks** — easily extendable to new detection vectors
 - **Lightweight** — minimal performance impact
 
@@ -80,7 +76,7 @@ profiles — it runs as a separate process at the debugger layer.
 
 ### Build
 
-Clone, then build all four projects (one solution, four outputs):
+Clone, then build all three projects (one solution, three outputs):
 
 ```powershell
 git clone https://github.com/yourusername/hooksbox.git
@@ -103,9 +99,8 @@ The build produces, all in `x64\Debug\` (or `x64\Release\`):
 | `hooksbox.dll` | `HooksBox` | API-hook DLL, injected into the target. |
 | `launcher.exe` | `Launcher` | Spawns the target suspended, injects `hooksbox.dll`, resumes — or, with `--debug`, hands off to `DebuggerWrapper`. |
 | `DebuggerWrapper.exe` | `DebuggerWrapper` | User-mode CPUID/RDTSC masking debugger. |
-| `vmcheck.exe` | `vmcheck` | Pafish-style validation target. |
 
-All four projects use PlatformToolset v143, target Windows SDK 10.0, x64
+All three projects use PlatformToolset v143, target Windows SDK 10.0, x64
 configurations. Win32 builds are not maintained (Launcher's Win32 config
 still exists for historical reasons and just maps to the x64 output).
 
@@ -115,32 +110,7 @@ All commands below assume you are in `x64\Debug\` (or `x64\Release\`). Every
 artifact looks for its peers in its own directory, so do **not** move them
 apart.
 
-### 1. `vmcheck.exe` — standalone baseline
-
-Run by itself to see what your machine looks like to a basic VM detector:
-
-```powershell
-.\vmcheck.exe
-```
-
-Output on this dev machine (bare-metal AMD):
-
-```
-vmcheck — anti-VM probe (DebuggerWrapper validation target)
-------------------------------------------------------------
-[CHECK] rdtsc_diff             : CLEAN
-[CHECK] rdtsc_diff_vmexit      : CLEAN
-[CHECK] cpuid_hv_bit           : CLEAN
-[CHECK] cpuid_vendor_leaf      : CLEAN    -- (zeros)
-------------------------------------------------------------
-Done.
-```
-
-Inside VirtualBox the same binary will print `TRACED` for at least
-`cpuid_hv_bit`, `cpuid_vendor_leaf` (showing `VBoxVBoxVBox`), and
-`rdtsc_diff_vmexit`.
-
-### 2. `launcher.exe` — inject `hooksbox.dll` into a target (default mode)
+### 1. `launcher.exe` — inject `hooksbox.dll` into a target (default mode)
 
 Interactive mode. The launcher creates the target in suspended state,
 `LoadLibrary`-injects `hooksbox.dll`, then resumes:
@@ -175,26 +145,26 @@ Typical drivers to validate the masking:
 - [pafish](https://github.com/a0rtega/pafish) — `pafish.exe`
 - [VMDetect](https://github.com/PerryWerneck/vmdetect/)
 
-### 3. `launcher.exe --debug <target>` — CPUID/RDTSC masking via DebuggerWrapper
+### 2. `launcher.exe --debug <target>` — CPUID/RDTSC masking via DebuggerWrapper
 
 Launcher's second mode delegates to `DebuggerWrapper.exe`, which lives next to
 it. Use this when the target probes CPUID/RDTSC (most modern anti-VM checks
 do):
 
 ```powershell
-.\launcher.exe --debug "C:\full\path\to\vmcheck.exe"
+.\launcher.exe --debug "C:\full\path\to\target.exe"
 ```
 
 Everything after `--debug <target>` is forwarded to `DebuggerWrapper.exe` as
 extra args, so e.g.:
 
 ```powershell
-.\launcher.exe --debug "C:\path\to\vmcheck.exe" --level DEBUG --log my.log
+.\launcher.exe --debug "C:\path\to\target.exe" --level DEBUG --log my.log
 ```
 
-is equivalent to running `DebuggerWrapper.exe` directly (see #4).
+is equivalent to running `DebuggerWrapper.exe` directly (see #3).
 
-### 4. `DebuggerWrapper.exe` — direct invocation
+### 3. `DebuggerWrapper.exe` — direct invocation
 
 ```
 DebuggerWrapper.exe --target <path.exe> [options]
@@ -217,7 +187,7 @@ DebuggerWrapper.exe --target <path.exe> [options]
 End-to-end verification example, on this dev machine:
 
 ```powershell
-.\DebuggerWrapper.exe --target .\vmcheck.exe --level DEBUG --log run.log
+.\DebuggerWrapper.exe --target .\target.exe --level DEBUG --log run.log
 ```
 
 Tail of `run.log`:
@@ -235,7 +205,7 @@ The dev box here is bare-metal, so masking is a no-op (HV bit already 0, leaf
 non-zero raw values in those leaves and rewrite them to the same zero result —
 the masking logic is vendor-agnostic.
 
-### 5. Combining layers
+### 4. Combining layers
 
 Most realistic test runs need BOTH layers active. There is currently no
 single-command combined runner — the workflow is:
@@ -255,7 +225,6 @@ Recommended detectors:
 - [Al-Khaser](https://github.com/ayoubfaouzi/al-khaser) — broad anti-VM / anti-sandbox / anti-debug.
 - [pafish](https://github.com/a0rtega/pafish) — paranoid fish; very close to the threat model HooksBox is tuned against.
 - [VMDetect](https://github.com/PerryWerneck/vmdetect/) — second-opinion VM detector.
-- `vmcheck.exe` (shipped here) — minimal local sanity check, focused on CPUID + RDTSC paths.
 
 Example al-khaser run with `hooksbox.dll` active:
 
@@ -287,7 +256,6 @@ hooxbox/
 │   │   ├── power_hooks.cpp
 │   │   ├── services_hooks.cpp
 │   │   └── window_hooks.cpp
-│   ├── tests/
 │   └── utils/
 │       └── log_utils.{cpp,h}  # sandbox_evasion.log writer (UTF-8 + BOM)
 ├── Launcher/                  # → launcher.exe
@@ -304,9 +272,6 @@ hooxbox/
 │   ├── instruction_scanner.{cpp,h}  # PE walk + 0F A2 / 0F 31 byte scan
 │   ├── cpuid_handler.{cpp,h}  # __cpuidex emulation + masking
 │   └── rdtsc_handler.{cpp,h}  # Virtual TSC + jitter
-├── vmcheck/                   # → vmcheck.exe  (validation target)
-│   ├── vmcheck.vcxproj
-│   └── vmcheck.cpp            # pafish-style HV-bit / vendor / rdtsc_diff probes
 └── tools/
     └── minhook/               # Vendored MinHook (static .lib)
 ```
