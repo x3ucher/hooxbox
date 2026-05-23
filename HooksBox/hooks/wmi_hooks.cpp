@@ -150,8 +150,6 @@ static void MarkEnumYieldedReal(IEnumWbemClassObject* pEnum)
     LeaveCriticalSection(&s_enumStatesCs);
 }
 
-namespace {
-
 class FakeWbemObject : public IWbemClassObject
 {
 public:
@@ -420,7 +418,6 @@ HRESULT STDMETHODCALLTYPE Hook_Next_FilterPnP(
 }
 
 // Per-class spoofing helpers — same rules as the previous per-class detours.
-namespace {
 
 // VEN_VBOX → VEN_GENERIC, then any remaining VBOX → Generic.
 std::wstring MaskVboxString(const std::wstring& s)

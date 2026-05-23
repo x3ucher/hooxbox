@@ -164,6 +164,7 @@ AutoTest.Net/
 .sass-cache/
 .claude/
 tests/
+vmcheck/
 
 # Installshield output folder
 [Ee]xpress/

@@ -153,7 +153,6 @@
     <ClInclude Include="hook_dll_main.h" />
     <ClInclude Include="hook_manager.h" />
     <ClInclude Include="utils\log_utils.h" />
-    <ClInclude Include="utils\WmiHelper.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="filters\vbox_filters.cpp" />
@@ -173,7 +172,6 @@
     <ClCompile Include="hook_dll_main.cpp" />
     <ClCompile Include="hook_manager.cpp" />
     <ClCompile Include="utils\log_utils.cpp" />
-    <ClCompile Include="utils\WmiHelper.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="hooksbox.def" />
