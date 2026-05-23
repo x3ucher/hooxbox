@@ -65,6 +65,103 @@ bool IsHiddenProcessW(const WCHAR* processName) {
         _wcsicmp(processName, L"VBoxTray.exe") == 0;
 }
 
+// ---------------------------------------------------------------------------
+// ANSI mirrors.  Implemented in terms of the ANSI VBox pattern tables below
+// (mirror of the wide tables in config.h) to avoid widening user buffers and
+// to keep registry/file-attribute results in the encoding the caller asked
+// for.
+// ---------------------------------------------------------------------------
+static const char* kVBoxRegistryPathsA[] = {
+    "VBoxGuest",
+    "VBoxMouse",
+    "VBoxService",
+    "VBoxSF",
+    "VBoxVideo",
+    "Oracle\\VirtualBox Guest Additions",
+    "VBOX__",
+};
+
+static const char* kVBoxFilePathsA[] = {
+    "C:\\WINDOWS\\system32\\drivers\\VBoxMouse.sys",
+    "C:\\WINDOWS\\system32\\drivers\\VBoxGuest.sys",
+    "C:\\WINDOWS\\system32\\drivers\\VBoxSF.sys",
+    "C:\\WINDOWS\\system32\\drivers\\VBoxVideo.sys",
+    "C:\\WINDOWS\\system32\\drivers\\VBoxWddm.sys",
+    "C:\\WINDOWS\\system32\\vboxdisp.dll",
+    "C:\\WINDOWS\\system32\\vboxhook.dll",
+    "C:\\WINDOWS\\system32\\vboxmrxnp.dll",
+    "C:\\WINDOWS\\system32\\vboxogl.dll",
+    "C:\\WINDOWS\\system32\\vboxoglarrayspu.dll",
+    "C:\\WINDOWS\\system32\\vboxoglcrutil.dll",
+    "C:\\WINDOWS\\system32\\vboxoglerrorspu.dll",
+    "C:\\WINDOWS\\system32\\vboxoglfeedbackspu.dll",
+    "C:\\WINDOWS\\system32\\vboxoglpackspu.dll",
+    "C:\\WINDOWS\\system32\\vboxoglpassthroughspu.dll",
+    "C:\\WINDOWS\\system32\\vboxservice.exe",
+    "C:\\WINDOWS\\system32\\vboxtray.exe",
+    "C:\\WINDOWS\\system32\\VBoxControl.exe",
+    "C:\\program files\\oracle\\virtualbox guest additions\\",
+};
+
+static const char* kVBoxDevicePathsA[] = {
+    "VBoxMiniRdrDN",
+    "VBoxGuest",
+    "VBoxMiniRdDN",
+    "VBoxTrayIPC",
+    "VBoxMouse",
+    "VBoxVideo",
+    "VBoxSF",
+    "VBoxDisp",
+};
+
+bool IsVBoxRegistryKeyA(HKEY /*hKey*/, LPCSTR lpSubKey, LPCSTR /*lpValueName*/) {
+    if (!lpSubKey) return false;
+    for (const char* needle : kVBoxRegistryPathsA) {
+        if (StrStrIA(lpSubKey, needle) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsVBoxFilePathA(LPCSTR lpFileName) {
+    if (!lpFileName) return false;
+    for (const char* needle : kVBoxFilePathsA) {
+        if (StrStrIA(lpFileName, needle) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsVBoxDetectionAttemptA(LPCSTR lpFileName, DWORD dwDesiredAccess,
+    DWORD dwShareMode, DWORD dwCreationDisposition,
+    DWORD dwFlagsAndAttributes) {
+    if (!lpFileName) return false;
+    for (const char* needle : kVBoxDevicePathsA) {
+        if (StrStrIA(lpFileName, needle) != nullptr) {
+            // Pafish uses exactly this flag combination; matching the wide
+            // helper keeps device access blocked only for the detection
+            // pattern and lets legitimate VBox usage through.
+            if (dwDesiredAccess == GENERIC_READ &&
+                dwShareMode == FILE_SHARE_READ &&
+                dwCreationDisposition == OPEN_EXISTING &&
+                dwFlagsAndAttributes == FILE_ATTRIBUTE_NORMAL) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool IsHiddenProcessA(const char* processName) {
+    if (!processName) return false;
+    return _stricmp(processName, "vboxservice.exe") == 0 ||
+        _stricmp(processName, "vboxtray.exe") == 0 ||
+        _stricmp(processName, "VBoxService.exe") == 0 ||
+        _stricmp(processName, "VBoxTray.exe") == 0;
+}
+
 bool IsVirtualBoxMAC(const BYTE* mac, DWORD length) {
     if (length < 6) return false;
     return mac[0] == 0x08 && mac[1] == 0x00 && mac[2] == 0x27;

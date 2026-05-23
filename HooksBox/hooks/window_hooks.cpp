@@ -4,6 +4,8 @@
 
 FindWindowW_t original_FindWindowW = nullptr;
 FindWindowExW_t original_FindWindowExW = nullptr;
+FindWindowA_t original_FindWindowA = nullptr;
+FindWindowExA_t original_FindWindowExA = nullptr;
 
 HWND WINAPI hook_FindWindowW(LPCWSTR lpClassName, LPCWSTR lpWindowName)
 {
@@ -46,7 +48,7 @@ HWND WINAPI hook_FindWindowW(LPCWSTR lpClassName, LPCWSTR lpWindowName)
 HWND WINAPI hook_FindWindowExW(HWND hwndParent, HWND hwndChildAfter,
     LPCWSTR lpClassName, LPCWSTR lpWindowName)
 {
-    // Та же логика маскировки, что и для FindWindowW
+    // пїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ, пїЅпїЅпїЅ пїЅ пїЅпїЅпїЅ FindWindowW
     if (lpClassName)
     {
         std::wstring className(lpClassName);
@@ -68,4 +70,37 @@ HWND WINAPI hook_FindWindowExW(HWND hwndParent, HWND hwndChildAfter,
     }
 
     return original_FindWindowExW(hwndParent, hwndChildAfter, lpClassName, lpWindowName);
+}
+
+// ---------------------------------------------------------------------------
+// ANSI mirrors.  Pafish vbox_traywindow uses FindWindow (which is
+// FindWindowA when UNICODE is not defined).  Without these hooks pafish
+// trivially finds VBoxTrayToolWnd[Class] regardless of the W hooks above.
+// ---------------------------------------------------------------------------
+static bool MatchVBoxAnsi(LPCSTR s) {
+    if (!s) return false;
+    return _stricmp(s, "VBoxTrayToolWndClass") == 0 ||
+           _stricmp(s, "VBoxTrayToolWnd") == 0 ||
+           _stricmp(s, "VirtualBox") == 0;
+}
+
+HWND WINAPI hook_FindWindowA(LPCSTR lpClassName, LPCSTR lpWindowName)
+{
+    if (MatchVBoxAnsi(lpClassName) || MatchVBoxAnsi(lpWindowName)) {
+        DebugPrint("[Window Hook] Blocked VirtualBox pattern (A)");
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return nullptr;
+    }
+    return original_FindWindowA(lpClassName, lpWindowName);
+}
+
+HWND WINAPI hook_FindWindowExA(HWND hwndParent, HWND hwndChildAfter,
+    LPCSTR lpClassName, LPCSTR lpWindowName)
+{
+    if (MatchVBoxAnsi(lpClassName) || MatchVBoxAnsi(lpWindowName)) {
+        DebugPrint("[Window Hook] Blocked VirtualBox pattern (Ex/A)");
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return nullptr;
+    }
+    return original_FindWindowExA(hwndParent, hwndChildAfter, lpClassName, lpWindowName);
 }

@@ -9,6 +9,7 @@
 
 
 WNetGetProviderNameW_t original_WNetGetProviderNameW = nullptr;
+WNetGetProviderNameA_t original_WNetGetProviderNameA = nullptr;
 GetAdaptersInfo_t original_GetAdaptersInfo = nullptr;
 GetAdaptersAddresses_t original_GetAdaptersAddresses = nullptr;
 
@@ -17,6 +18,17 @@ DWORD WINAPI hook_WNetGetProviderNameW(DWORD dwNetType, LPWSTR lpProviderName, L
     if (result == NO_ERROR && lpProviderName && lpBufferSize && *lpBufferSize > 0) {
         std::wstring providerName(lpProviderName);
         if (EqualsCaseInsensitive(providerName, VIRTUALBOX_PROVIDER_NAME)) {
+            return ERROR_NO_NETWORK;
+        }
+    }
+    return result;
+}
+
+// ANSI mirror — pafish vbox_network_share uses WNetGetProviderName (ANSI).
+DWORD WINAPI hook_WNetGetProviderNameA(DWORD dwNetType, LPSTR lpProviderName, LPDWORD lpBufferSize) {
+    DWORD result = original_WNetGetProviderNameA(dwNetType, lpProviderName, lpBufferSize);
+    if (result == NO_ERROR && lpProviderName && lpBufferSize && *lpBufferSize > 0) {
+        if (_stricmp(lpProviderName, "VirtualBox Shared Folders") == 0) {
             return ERROR_NO_NETWORK;
         }
     }

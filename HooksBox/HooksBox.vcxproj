@@ -150,6 +150,12 @@
     <ClInclude Include="hooks\wmi_hooks.h" />
     <ClInclude Include="hooks\power_hooks.h" />
     <ClInclude Include="hooks\services_hooks.h" />
+    <ClInclude Include="hooks\debugger_hooks.h" />
+    <ClInclude Include="hooks\time_hooks.h" />
+    <ClInclude Include="hooks\process_info_hooks.h" />
+    <ClInclude Include="hooks\input_hooks.h" />
+    <ClInclude Include="hooks\object_info_hooks.h" />
+    <ClInclude Include="hooks\module_hide_hooks.h" />
     <ClInclude Include="hook_dll_main.h" />
     <ClInclude Include="hook_manager.h" />
     <ClInclude Include="utils\log_utils.h" />
@@ -169,6 +175,12 @@
     <ClCompile Include="hooks\wmi_hooks.cpp" />
     <ClCompile Include="hooks\power_hooks.cpp" />
     <ClCompile Include="hooks\services_hooks.cpp" />
+    <ClCompile Include="hooks\debugger_hooks.cpp" />
+    <ClCompile Include="hooks\time_hooks.cpp" />
+    <ClCompile Include="hooks\process_info_hooks.cpp" />
+    <ClCompile Include="hooks\input_hooks.cpp" />
+    <ClCompile Include="hooks\object_info_hooks.cpp" />
+    <ClCompile Include="hooks\module_hide_hooks.cpp" />
     <ClCompile Include="hook_dll_main.cpp" />
     <ClCompile Include="hook_manager.cpp" />
     <ClCompile Include="utils\log_utils.cpp" />

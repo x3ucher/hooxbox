@@ -33,6 +33,12 @@
 #include "power_hooks.h"
 #include "services_hooks.h"
 #include "wmi_hooks.h"
+#include "debugger_hooks.h"
+#include "time_hooks.h"
+#include "process_info_hooks.h"
+#include "input_hooks.h"
+#include "object_info_hooks.h"
+#include "module_hide_hooks.h"
 
 #define MH_STATIC
 #include "MinHook.h"
@@ -106,6 +112,35 @@ bool InitializeHooks() {
         return false;
     }
 
+    if (!InitializeDebuggerHooks()) {
+        DebugPrint("[Debugger]");
+        return false;
+    }
+
+    if (!InitializeTimeHooks()) {
+        DebugPrint("[Time]");
+        return false;
+    }
+
+    if (!InitializeProcessInfoHooks()) {
+        DebugPrint("[ProcessInfo]");
+        return false;
+    }
+
+    if (!InitializeInputHooks()) {
+        DebugPrint("[Input]");
+        return false;
+    }
+
+    if (!InitializeObjectInfoHooks()) {
+        DebugPrint("[ObjectInfo]");
+        return false;
+    }
+
+    // Note: InitializeModuleHideHooks needs the hooksbox.dll HMODULE; it's
+    // invoked separately from DllMain (DLL_PROCESS_ATTACH) where we have
+    // it for free, not from this aggregate initializer.
+
     DebugPrint("[HOOK_DLL] Hooks installed successfully!");
     return true;
 }
@@ -128,19 +163,44 @@ bool InitializeRegistryHooks() {
         DebugPrint("[HOOK_DLL] Failed to create hook for RegQueryValueExW");
         return false;
     }
-    
+
     if (MH_CreateHook(&RegEnumKeyExW, &hook_RegEnumKeyExW,
         reinterpret_cast<void**>(&original_RegEnumKeyExW)) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to create hook for RegEnumKeyExW");
         return false;
     }
 
+    if (MH_CreateHook(&RegOpenKeyExA, &hook_RegOpenKeyExA,
+        reinterpret_cast<void**>(&original_RegOpenKeyExA)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for RegOpenKeyExA");
+        return false;
+    }
+
+    if (MH_CreateHook(&RegQueryValueExA, &hook_RegQueryValueExA,
+        reinterpret_cast<void**>(&original_RegQueryValueExA)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for RegQueryValueExA");
+        return false;
+    }
+
+    if (MH_CreateHook(&RegEnumKeyExA, &hook_RegEnumKeyExA,
+        reinterpret_cast<void**>(&original_RegEnumKeyExA)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for RegEnumKeyExA");
+        return false;
+    }
+
     DebugPrint("[HOOK_DLL] Registry hooks created successfully");
 
-    if (MH_EnableHook(&RegOpenKeyExW) != MH_OK ||
+    // The trailing W check used to omit `!= MH_OK`; it worked by coincidence
+    // (MH_OK == 0) but read like a bug.  Made consistent + every hook now
+    // covered, including the ANSI mirrors pafish-style detectors actually
+    // call.
+    if (MH_EnableHook(&RegOpenKeyExW)    != MH_OK ||
         MH_EnableHook(&RegQueryValueExW) != MH_OK ||
-        MH_EnableHook(&RegEnumKeyExW)) {
-        DebugPrint("[HOOK_DLL] Failed to enable hooks");
+        MH_EnableHook(&RegEnumKeyExW)    != MH_OK ||
+        MH_EnableHook(&RegOpenKeyExA)    != MH_OK ||
+        MH_EnableHook(&RegQueryValueExA) != MH_OK ||
+        MH_EnableHook(&RegEnumKeyExA)    != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to enable registry hooks");
         return false;
     }
 
@@ -156,10 +216,17 @@ bool InitializeFileHooks() {
         return false;
     }
 
+    if (MH_CreateHook(&GetFileAttributesA, &hook_GetFileAttributesA,
+        reinterpret_cast<void**>(&original_GetFileAttributesA)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for GetFileAttributesA");
+        return false;
+    }
+
     DebugPrint("[HOOK_DLL] File hooks created successfully");
 
-    if (MH_EnableHook(&GetFileAttributesW) != MH_OK) {
-        DebugPrint("[HOOK_DLL] Failed to enable hooks");
+    if (MH_EnableHook(&GetFileAttributesW) != MH_OK ||
+        MH_EnableHook(&GetFileAttributesA) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to enable file hooks");
         return false;
     }
 
@@ -200,9 +267,11 @@ bool InitializeProcessHooks() {
     }
 
     FARPROC pProcess32FirstW = GetProcAddress(hKernel32, "Process32FirstW");
-    FARPROC pProcess32NextW = GetProcAddress(hKernel32, "Process32NextW");
+    FARPROC pProcess32NextW  = GetProcAddress(hKernel32, "Process32NextW");
+    FARPROC pProcess32First  = GetProcAddress(hKernel32, "Process32First");
+    FARPROC pProcess32Next   = GetProcAddress(hKernel32, "Process32Next");
 
-    if (!pProcess32FirstW || !pProcess32NextW) {
+    if (!pProcess32FirstW || !pProcess32NextW || !pProcess32First || !pProcess32Next) {
         DebugPrint("[HOOK_DLL] Failed to get process functions addresses");
         return false;
     }
@@ -215,14 +284,28 @@ bool InitializeProcessHooks() {
 
     if (MH_CreateHook(pProcess32NextW, &hook_Process32NextW,
         reinterpret_cast<void**>(&original_Process32NextW)) != MH_OK) {
-        DebugPrint("[HOOK_DLL] Failed to create hook for Process32Next");
+        DebugPrint("[HOOK_DLL] Failed to create hook for Process32NextW");
+        return false;
+    }
+
+    if (MH_CreateHook(pProcess32First, &hook_Process32First,
+        reinterpret_cast<void**>(&original_Process32First)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for Process32First (A)");
+        return false;
+    }
+
+    if (MH_CreateHook(pProcess32Next, &hook_Process32Next,
+        reinterpret_cast<void**>(&original_Process32Next)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for Process32Next (A)");
         return false;
     }
 
     DebugPrint("[HOOK_DLL] Process hooks created successfully");
 
     if (MH_EnableHook(pProcess32FirstW) != MH_OK ||
-        MH_EnableHook(pProcess32NextW) != MH_OK) {
+        MH_EnableHook(pProcess32NextW)  != MH_OK ||
+        MH_EnableHook(pProcess32First)  != MH_OK ||
+        MH_EnableHook(pProcess32Next)   != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to enable process hooks");
         return false;
     }
@@ -244,10 +327,24 @@ bool InitializeWndHooks() {
         return false;
     }
 
+    if (MH_CreateHook(&FindWindowA, &hook_FindWindowA,
+        reinterpret_cast<void**>(&original_FindWindowA)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for FindWindowA");
+        return false;
+    }
+
+    if (MH_CreateHook(&FindWindowExA, &hook_FindWindowExA,
+        reinterpret_cast<void**>(&original_FindWindowExA)) != MH_OK) {
+        DebugPrint("[HOOK_DLL] Failed to create hook for FindWindowExA");
+        return false;
+    }
+
     DebugPrint("[HOOK_DLL] Window hooks created successfully");
 
-    if (MH_EnableHook(&FindWindowW) != MH_OK ||
-        MH_EnableHook(&FindWindowExW) != MH_OK) {
+    if (MH_EnableHook(&FindWindowW)   != MH_OK ||
+        MH_EnableHook(&FindWindowExW) != MH_OK ||
+        MH_EnableHook(&FindWindowA)   != MH_OK ||
+        MH_EnableHook(&FindWindowExA) != MH_OK) {
         DebugPrint("[HOOK_DLL] Failed to enable window hooks");
         return false;
     }
@@ -267,8 +364,9 @@ bool InitializeNetworkHooks() {
     }
 
     FARPROC pWNetGetProviderNameW = GetProcAddress(hMpr, "WNetGetProviderNameW");
-    if (!pWNetGetProviderNameW) {
-        DebugPrint("[NETWORK_HOOKS] Failed to get WNetGetProviderNameW address");
+    FARPROC pWNetGetProviderNameA = GetProcAddress(hMpr, "WNetGetProviderNameA");
+    if (!pWNetGetProviderNameW || !pWNetGetProviderNameA) {
+        DebugPrint("[NETWORK_HOOKS] Failed to get WNetGetProviderName addresses");
         return false;
     }
 
@@ -278,14 +376,21 @@ bool InitializeNetworkHooks() {
         return false;
     }
 
-    DebugPrint("[NETWORK_HOOKS] WNetGetProviderNameW hook created successfully");
-
-    if (MH_EnableHook(pWNetGetProviderNameW) != MH_OK) {
-        DebugPrint("[NETWORK_HOOKS] Failed to enable WNetGetProviderNameW hook");
+    if (MH_CreateHook(pWNetGetProviderNameA, &hook_WNetGetProviderNameA,
+        reinterpret_cast<void**>(&original_WNetGetProviderNameA)) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to create hook for WNetGetProviderNameA");
         return false;
     }
 
-    DebugPrint("[NETWORK_HOOKS] WNetGetProviderNameW hook enabled successfully");
+    DebugPrint("[NETWORK_HOOKS] WNetGetProviderName hooks created successfully");
+
+    if (MH_EnableHook(pWNetGetProviderNameW) != MH_OK ||
+        MH_EnableHook(pWNetGetProviderNameA) != MH_OK) {
+        DebugPrint("[NETWORK_HOOKS] Failed to enable WNetGetProviderName hooks");
+        return false;
+    }
+
+    DebugPrint("[NETWORK_HOOKS] WNetGetProviderName hooks enabled successfully");
     return true;
 }
 
@@ -482,6 +587,265 @@ bool InitializePowerHooks() {
     }
 
     DebugPrint("[POWER_HOOK] GetPwrCapabilities hook installed");
+    return true;
+}
+
+bool InitializeDebuggerHooks() {
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (!hKernel32) {
+        DebugPrint("[DEBUGGER_HOOK] Failed to get kernel32 handle");
+        return false;
+    }
+
+    FARPROC pIsDebuggerPresent = GetProcAddress(hKernel32, "IsDebuggerPresent");
+    FARPROC pCheckRemoteDbg    = GetProcAddress(hKernel32, "CheckRemoteDebuggerPresent");
+
+    if (!pIsDebuggerPresent || !pCheckRemoteDbg) {
+        DebugPrint("[DEBUGGER_HOOK] Failed to get debugger API addresses");
+        return false;
+    }
+
+    if (MH_CreateHook(pIsDebuggerPresent, &hook_IsDebuggerPresent,
+        reinterpret_cast<void**>(&original_IsDebuggerPresent)) != MH_OK) {
+        DebugPrint("[DEBUGGER_HOOK] Failed to create hook for IsDebuggerPresent");
+        return false;
+    }
+
+    if (MH_CreateHook(pCheckRemoteDbg, &hook_CheckRemoteDebuggerPresent,
+        reinterpret_cast<void**>(&original_CheckRemoteDebuggerPresent)) != MH_OK) {
+        DebugPrint("[DEBUGGER_HOOK] Failed to create hook for CheckRemoteDebuggerPresent");
+        return false;
+    }
+
+    if (MH_EnableHook(pIsDebuggerPresent) != MH_OK ||
+        MH_EnableHook(pCheckRemoteDbg)    != MH_OK) {
+        DebugPrint("[DEBUGGER_HOOK] Failed to enable debugger hooks");
+        return false;
+    }
+
+    // Mask the PEB-resident flags too — pafish debug_beingdebugged_peb reads
+    // them directly and never goes through kernel32!IsDebuggerPresent.
+    PatchPebDebuggerFlags();
+
+    DebugPrint("[DEBUGGER_HOOK] Debugger hooks installed (incl. PEB patch)");
+    return true;
+}
+
+bool InitializeTimeHooks() {
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (!hKernel32) {
+        DebugPrint("[TIME_HOOK] Failed to get kernel32 handle");
+        return false;
+    }
+
+    FARPROC pGetTickCount   = GetProcAddress(hKernel32, "GetTickCount");
+    FARPROC pGetTickCount64 = GetProcAddress(hKernel32, "GetTickCount64");
+
+    if (!pGetTickCount || !pGetTickCount64) {
+        DebugPrint("[TIME_HOOK] Failed to get tick-count API addresses");
+        return false;
+    }
+
+    if (MH_CreateHook(pGetTickCount, &hook_GetTickCount,
+        reinterpret_cast<void**>(&original_GetTickCount)) != MH_OK) {
+        DebugPrint("[TIME_HOOK] Failed to create hook for GetTickCount");
+        return false;
+    }
+
+    if (MH_CreateHook(pGetTickCount64, &hook_GetTickCount64,
+        reinterpret_cast<void**>(&original_GetTickCount64)) != MH_OK) {
+        DebugPrint("[TIME_HOOK] Failed to create hook for GetTickCount64");
+        return false;
+    }
+
+    if (MH_EnableHook(pGetTickCount)   != MH_OK ||
+        MH_EnableHook(pGetTickCount64) != MH_OK) {
+        DebugPrint("[TIME_HOOK] Failed to enable tick-count hooks");
+        return false;
+    }
+
+    DebugPrint("[TIME_HOOK] GetTickCount/GetTickCount64 hooks installed");
+    return true;
+}
+
+bool InitializeProcessInfoHooks() {
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    if (!hNtdll) {
+        DebugPrint("[PROCINFO_HOOK] Failed to get ntdll handle");
+        return false;
+    }
+
+    FARPROC pNtQueryInformationProcess =
+        GetProcAddress(hNtdll, "NtQueryInformationProcess");
+    FARPROC pNtClose = GetProcAddress(hNtdll, "NtClose");
+
+    if (!pNtQueryInformationProcess || !pNtClose) {
+        DebugPrint("[PROCINFO_HOOK] Failed to get ntdll function addresses");
+        return false;
+    }
+
+    if (MH_CreateHook(pNtQueryInformationProcess,
+        &hook_NtQueryInformationProcess,
+        reinterpret_cast<void**>(&original_NtQueryInformationProcess)) != MH_OK) {
+        DebugPrint("[PROCINFO_HOOK] Failed to create hook for NtQueryInformationProcess");
+        return false;
+    }
+
+    if (MH_CreateHook(pNtClose, &hook_NtClose,
+        reinterpret_cast<void**>(&original_NtClose)) != MH_OK) {
+        DebugPrint("[PROCINFO_HOOK] Failed to create hook for NtClose");
+        return false;
+    }
+
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (!hKernel32) {
+        DebugPrint("[PROCINFO_HOOK] Failed to get kernel32 handle");
+        return false;
+    }
+    FARPROC pCloseHandle = GetProcAddress(hKernel32, "CloseHandle");
+    if (!pCloseHandle) {
+        DebugPrint("[PROCINFO_HOOK] Failed to get CloseHandle address");
+        return false;
+    }
+    if (MH_CreateHook(pCloseHandle, &hook_CloseHandle,
+        reinterpret_cast<void**>(&original_CloseHandle)) != MH_OK) {
+        DebugPrint("[PROCINFO_HOOK] Failed to create hook for CloseHandle");
+        return false;
+    }
+
+    if (MH_EnableHook(pNtQueryInformationProcess) != MH_OK ||
+        MH_EnableHook(pNtClose)                   != MH_OK ||
+        MH_EnableHook(pCloseHandle)               != MH_OK) {
+        DebugPrint("[PROCINFO_HOOK] Failed to enable process-info hooks");
+        return false;
+    }
+
+    DebugPrint("[PROCINFO_HOOK] NtQueryInformationProcess + NtClose + CloseHandle installed");
+    return true;
+}
+
+bool InitializeInputHooks() {
+    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+    if (!hUser32) hUser32 = LoadLibraryW(L"user32.dll");
+    if (!hUser32) {
+        DebugPrint("[INPUT_HOOK] Failed to load user32.dll");
+        return false;
+    }
+    FARPROC pGetLastInputInfo = GetProcAddress(hUser32, "GetLastInputInfo");
+    if (!pGetLastInputInfo) {
+        DebugPrint("[INPUT_HOOK] Failed to get GetLastInputInfo address");
+        return false;
+    }
+    if (MH_CreateHook(pGetLastInputInfo, &hook_GetLastInputInfo,
+        reinterpret_cast<void**>(&original_GetLastInputInfo)) != MH_OK) {
+        DebugPrint("[INPUT_HOOK] Failed to create hook for GetLastInputInfo");
+        return false;
+    }
+    if (MH_EnableHook(pGetLastInputInfo) != MH_OK) {
+        DebugPrint("[INPUT_HOOK] Failed to enable GetLastInputInfo hook");
+        return false;
+    }
+    DebugPrint("[INPUT_HOOK] GetLastInputInfo hook installed");
+    return true;
+}
+
+bool InitializeObjectInfoHooks() {
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    if (!hNtdll) {
+        DebugPrint("[OBJINFO_HOOK] Failed to get ntdll handle");
+        return false;
+    }
+    FARPROC pNtQueryObject = GetProcAddress(hNtdll, "NtQueryObject");
+    if (!pNtQueryObject) {
+        DebugPrint("[OBJINFO_HOOK] Failed to get NtQueryObject address");
+        return false;
+    }
+    if (MH_CreateHook(pNtQueryObject, &hook_NtQueryObject,
+        reinterpret_cast<void**>(&original_NtQueryObject)) != MH_OK) {
+        DebugPrint("[OBJINFO_HOOK] Failed to create hook for NtQueryObject");
+        return false;
+    }
+    if (MH_EnableHook(pNtQueryObject) != MH_OK) {
+        DebugPrint("[OBJINFO_HOOK] Failed to enable NtQueryObject hook");
+        return false;
+    }
+    DebugPrint("[OBJINFO_HOOK] NtQueryObject hook installed");
+    return true;
+}
+
+bool InitializeModuleHideHooks(HMODULE hSelf) {
+    // Step 1: unlink ourselves from PEB->Ldr lists.  This covers
+    // EnumProcessModulesEx, Module32First/Next, LdrEnumerateLoadedModules,
+    // direct PEB-Ldr walks, GetModuleHandleEx, GetModuleFileNameEx — all
+    // of which derive their results from the LDR lists.
+    HideHooksboxModule(hSelf);
+
+    // Step 2: hook GetMappedFileName{W,A} so al-khaser's MemoryWalk_Hidden
+    // can't see the file backing our address range via NtQueryVirtualMemory
+    // (MemorySectionName).  LDR unlinking doesn't touch the section-name
+    // store; this hook does.
+    HMODULE hPsapi = GetModuleHandleW(L"psapi.dll");
+    if (!hPsapi) hPsapi = LoadLibraryW(L"psapi.dll");
+    if (!hPsapi) {
+        // psapi is a forwarder DLL — the real symbols live in kernel32 on
+        // modern Windows.  Fall back to kernel32 if psapi failed.
+        hPsapi = GetModuleHandleW(L"kernel32.dll");
+    }
+    if (!hPsapi) {
+        DebugPrint("[MODHIDE_HOOK] Failed to load psapi/kernel32");
+        return false;
+    }
+    FARPROC pGmfW = GetProcAddress(hPsapi, "GetMappedFileNameW");
+    FARPROC pGmfA = GetProcAddress(hPsapi, "GetMappedFileNameA");
+    // On Windows 10+, psapi.dll forwards to KernelBase.dll's K32GetMappedFileNameW.
+    // Try the K32-prefixed name as a fallback if the unprefixed lookup misses.
+    if (!pGmfW) pGmfW = GetProcAddress(hPsapi, "K32GetMappedFileNameW");
+    if (!pGmfA) pGmfA = GetProcAddress(hPsapi, "K32GetMappedFileNameA");
+    if (!pGmfW || !pGmfA) {
+        DebugPrint("[MODHIDE_HOOK] Failed to resolve GetMappedFileNameW/A addresses");
+        return false;
+    }
+    if (MH_CreateHook(pGmfW, &hook_GetMappedFileNameW,
+        reinterpret_cast<void**>(&original_GetMappedFileNameW)) != MH_OK) {
+        DebugPrint("[MODHIDE_HOOK] Failed to create hook for GetMappedFileNameW");
+        return false;
+    }
+    if (MH_CreateHook(pGmfA, &hook_GetMappedFileNameA,
+        reinterpret_cast<void**>(&original_GetMappedFileNameA)) != MH_OK) {
+        DebugPrint("[MODHIDE_HOOK] Failed to create hook for GetMappedFileNameA");
+        return false;
+    }
+    if (MH_EnableHook(pGmfW) != MH_OK ||
+        MH_EnableHook(pGmfA) != MH_OK) {
+        DebugPrint("[MODHIDE_HOOK] Failed to enable GetMappedFileName hooks");
+        return false;
+    }
+
+    // Step 3: hook the underlying ntdll syscall stub too.  The public
+    // GetMappedFileName{W,A} APIs forward through psapi → kernel32 →
+    // kernelbase, and which link the caller's import binds to can vary;
+    // hooking the syscall stub catches every path uniformly.
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    if (!hNtdll) {
+        DebugPrint("[MODHIDE_HOOK] Failed to get ntdll handle");
+        return false;
+    }
+    FARPROC pNtQVM = GetProcAddress(hNtdll, "NtQueryVirtualMemory");
+    if (!pNtQVM) {
+        DebugPrint("[MODHIDE_HOOK] Failed to resolve NtQueryVirtualMemory");
+        return false;
+    }
+    if (MH_CreateHook(pNtQVM, &hook_NtQueryVirtualMemory,
+        reinterpret_cast<void**>(&original_NtQueryVirtualMemory)) != MH_OK) {
+        DebugPrint("[MODHIDE_HOOK] Failed to create hook for NtQueryVirtualMemory");
+        return false;
+    }
+    if (MH_EnableHook(pNtQVM) != MH_OK) {
+        DebugPrint("[MODHIDE_HOOK] Failed to enable NtQueryVirtualMemory hook");
+        return false;
+    }
+
+    DebugPrint("[MODHIDE_HOOK] LDR unlink + GetMappedFileName + NtQueryVirtualMemory hooks installed");
     return true;
 }
 

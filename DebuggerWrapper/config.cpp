@@ -31,7 +31,11 @@ void PrintUsage() {
         L"  --log    <path>        Log file path (default: debugger_wrapper.log in cwd).\n"
         L"  --level  ERROR|INFO|DEBUG   Log verbosity (default: INFO).\n"
         L"  --no-stdout            Don't echo logs to stdout.\n"
-        L"  --no-cpuid             Don't intercept CPUID instructions.\n"
+        L"  --cpuid                Intercept CPUID (off by default — leaks BPs\n"
+        L"                         under some debug builds; enable only in a\n"
+        L"                         hypervisor guest where hypervisor bit + vendor\n"
+        L"                         leaves need masking).\n"
+        L"  --no-cpuid             Explicitly disable CPUID interception (default).\n"
         L"  --no-rdtsc             Don't intercept RDTSC instructions.\n"
         L"  --jitter-min <N>       Min ticks added per virtual RDTSC (default: 80).\n"
         L"  --jitter-max <N>       Max ticks added per virtual RDTSC (default: 200).\n"
@@ -79,6 +83,12 @@ bool ParseCommandLine(int argc, wchar_t** argv, Config& cfg, std::wstring& errMs
             cfg.alsoStdout = false;
         } else if (a == L"--no-cpuid") {
             cfg.enableCpuid = false;
+        } else if (a == L"--cpuid") {
+            // Explicit opt-in: CPUID interception is OFF by default — see
+            // config.h for the rationale.  Enable only when running inside
+            // a hypervisor guest where leaf 1 / leaf 0x40000000 need
+            // masking.
+            cfg.enableCpuid = true;
         } else if (a == L"--no-rdtsc") {
             cfg.enableRdtsc = false;
         } else if (a == L"--scan-dlls") {

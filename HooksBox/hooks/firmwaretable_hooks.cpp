@@ -48,7 +48,12 @@ DWORD WINAPI hook_GetSystemFirmwareTable(
             // TableData of length = *(DWORD*)(buf+4).  Each structure
             // is header(4) + formatted area(length-4) + strings section
             // terminated by a double-null.  Type 127 marks end-of-table.
-            const int kTargetMinTables = 12;
+            //
+            // al-khaser's number_SMBIOS_tables() flags anything <= 40
+            // tables as VM.  Real bare-metal Windows boxes typically
+            // report ~50 tables; VBox/VMware ship with ~6-8.  Inflate
+            // past the al-khaser threshold with a safety margin.
+            const int kTargetMinTables = 45;
             DWORD tableDataLen = *reinterpret_cast<DWORD*>(buf + 4);
             if (8 + tableDataLen > result) tableDataLen = result - 8;
 

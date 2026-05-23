@@ -242,6 +242,16 @@ bool RunDebuggerLoop(const Config& cfg, RunStats& stats) {
     // TID of the LoadLibraryW remote thread (if --inject was used), so we can
     // recognise its events in the loop and report when injection completed.
     DWORD injectorTid = 0;
+    // Main thread state for the inject-race fix.  When --inject is used we
+    // suspend the target's main thread between CreateRemoteThread and the
+    // injector's EXIT_THREAD so the target's CRT / main() can't race ahead
+    // of the injected DLL's DllMain.  Without this, fast-startup targets
+    // (pafish — minimal CRT, banner straight into IsDebuggerPresent /
+    // PEB.BeingDebugged checks) reach their anti-debug code before our
+    // hooks are installed.
+    DWORD mainTid = 0;
+    HANDLE mainThreadHandle = nullptr;
+    bool mainThreadSuspended = false;
     // Whether we observed LOAD_DLL_DEBUG_EVENT for the injected DLL. On modern
     // Windows the kernel zeroes RAX in the thread-exit thunk for security, so
     // the injector thread's exit code is always 0 regardless of LoadLibraryW
@@ -283,15 +293,44 @@ bool RunDebuggerLoop(const Config& cfg, RunStats& stats) {
             // This must happen here (target threads still suspended) so the
             // injector thread starts running as soon as we ContinueDebugEvent,
             // ideally before the target's CRT init reaches user code.
+            //
+            // Race-prevention: after CreateRemoteThread succeeds, raise the
+            // main thread's suspend count by one.  The kernel will lower it
+            // once when ContinueDebugEvent is issued for this debug event,
+            // so the net effect is "main thread stays suspended after we
+            // continue".  Only the injector thread runs, executes
+            // LoadLibraryW (which serialises through the loader and waits
+            // for every DllMain to return), then exits.  We catch the
+            // injector's EXIT_THREAD below and resume the main thread.
+            //
+            // Without this, fast-init targets (pafish: minimal CRT, banner
+            // straight into IsDebuggerPresent / PEB.BeingDebugged reads)
+            // reach their detection routines before our DllMain even
+            // patches PEB.
+            mainTid = de.dwThreadId;
+            threadHandles[de.dwThreadId] = info.hThread;
+            mainThreadHandle = info.hThread;
+
             if (!cfg.injectDll.empty()) {
                 injectorTid = InjectDllViaRemoteThread(info.hProcess, cfg.injectDll);
                 if (injectorTid == 0) {
                     DBG_LOG_E(COMP_CORE, L"DLL injection failed; continuing without it.");
+                } else if (mainThreadHandle) {
+                    DWORD prev = SuspendThread(mainThreadHandle);
+                    if (prev == (DWORD)-1) {
+                        DBG_LOG_E(COMP_CORE,
+                                  L"SuspendThread(main) failed — proceeding without race-fix: %s",
+                                  FormatWinError(GetLastError()).c_str());
+                    } else {
+                        mainThreadSuspended = true;
+                        DBG_LOG_I(COMP_CORE,
+                                  L"Main thread suspended until injector EXIT_THREAD; prev suspend count=%lu",
+                                  prev);
+                    }
                 }
             }
 
             if (info.hFile) CloseHandle(info.hFile);
-            threadHandles[de.dwThreadId] = info.hThread;
             break;
         }
 
@@ -357,6 +396,25 @@ bool RunDebuggerLoop(const Config& cfg, RunStats& stats) {
                     DBG_LOG_E(COMP_CORE,
                               L"EXIT_THREAD: injector TID=%lu finished BUT no LOAD_DLL event was seen for the inject path — load failed",
                               de.dwThreadId);
+                }
+
+                // Injection is done — release the main thread.  LoadLibraryW
+                // returns only after every chained DllMain (hooksbox + every
+                // DLL its CRT pulls in) has run to completion, so by the
+                // time we land here every hook is installed and the PEB
+                // patch is applied.
+                if (mainThreadSuspended && mainThreadHandle) {
+                    DWORD prev = ResumeThread(mainThreadHandle);
+                    if (prev == (DWORD)-1) {
+                        DBG_LOG_E(COMP_CORE,
+                                  L"ResumeThread(main) failed: %s",
+                                  FormatWinError(GetLastError()).c_str());
+                    } else {
+                        DBG_LOG_I(COMP_CORE,
+                                  L"Main thread resumed; prev suspend count=%lu",
+                                  prev);
+                    }
+                    mainThreadSuspended = false;
                 }
             } else {
                 DBG_LOG_D(COMP_CORE, L"EXIT_THREAD: TID=%lu code=%lu",

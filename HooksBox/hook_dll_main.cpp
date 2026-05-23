@@ -14,6 +14,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         if (!InstallWmiHooks()) {
             WriteFileLog(L"WARN", L"DllMain: InstallWmiHooks() failed (continuing)");
         }
+        // Module-hide layer needs our own HMODULE — DllMain is the only
+        // place we get it for free without a syscall.  Runs after the
+        // regular hook chain so the LDR walk we hide from is fully set up.
+        if (!InitializeModuleHideHooks(hModule)) {
+            WriteFileLog(L"WARN", L"DllMain: InitializeModuleHideHooks() failed (continuing)");
+        }
         WriteFileLog(L"INFO", L"DllMain: hooksbox.dll attached");
         break;
 

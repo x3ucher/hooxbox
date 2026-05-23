@@ -14,13 +14,24 @@
 #pragma comment(lib, "psapi.lib")
 
 
-// Проверяет, является ли ключ реестра связанным с VirtualBox
+// VirtualBox key/path predicates вЂ” wide forms.
 bool IsVBoxRegistryKey(HKEY hKey, LPCWSTR lpSubKey, LPCWSTR lpValueName = nullptr);
 bool IsVBoxFilePath(LPCWSTR lpFileName);
 bool IsVBoxDetectionAttempt(LPCWSTR lpFileName, DWORD dwDesiredAccess,
     DWORD dwShareMode, DWORD dwCreationDisposition,
     DWORD dwFlagsAndAttributes);
 bool IsHiddenProcessW(const WCHAR* processName);
+
+// ANSI mirrors. Pafish/al-khaser frequently call ANSI WinAPI directly, so the
+// hooks for *A entry points need filters that operate on LPCSTR without going
+// through a wide-conversion round-trip (the registry-value buffers returned
+// from RegQueryValueExA are ANSI strings and must not be widened).
+bool IsVBoxRegistryKeyA(HKEY hKey, LPCSTR lpSubKey, LPCSTR lpValueName = nullptr);
+bool IsVBoxFilePathA(LPCSTR lpFileName);
+bool IsVBoxDetectionAttemptA(LPCSTR lpFileName, DWORD dwDesiredAccess,
+    DWORD dwShareMode, DWORD dwCreationDisposition,
+    DWORD dwFlagsAndAttributes);
+bool IsHiddenProcessA(const char* processName);
 bool IsVirtualBoxMAC(const BYTE* mac, DWORD length);
 void MaskMACAddress(BYTE* mac, DWORD length);
 bool ContainsVirtualBoxString(const BYTE* data, DWORD size);

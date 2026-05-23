@@ -3,13 +3,13 @@
 
 #include <windows.h>
 
-typedef LSTATUS(WINAPI* GetFileAttributesW_t)(LPCWSTR);
+typedef DWORD(WINAPI* GetFileAttributesW_t)(LPCWSTR);
+typedef DWORD(WINAPI* GetFileAttributesA_t)(LPCSTR);
 
-// Глобальные указатели на оригинальные функции
 extern GetFileAttributesW_t original_GetFileAttributesW;
+extern GetFileAttributesA_t original_GetFileAttributesA;
 
-LSTATUS WINAPI hook_GetFileAttributesW(LPCWSTR lpFileName);
-// LSTATUS WINAPI hook_GetFileAttributesA(LPCSTR lpFileName);
-
+DWORD WINAPI hook_GetFileAttributesW(LPCWSTR lpFileName);
+DWORD WINAPI hook_GetFileAttributesA(LPCSTR lpFileName);
 
 #endif // FILE_HOOKS_H

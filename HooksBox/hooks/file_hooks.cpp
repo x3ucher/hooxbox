@@ -4,21 +4,30 @@
 #include <string>
 #include <map>
 
-// Инициализация указателей на оригинальные функции
 GetFileAttributesW_t original_GetFileAttributesW = nullptr;
+GetFileAttributesA_t original_GetFileAttributesA = nullptr;
 
-// Хук для GetFileAttributes
-LSTATUS WINAPI hook_GetFileAttributesW(
+DWORD WINAPI hook_GetFileAttributesW(
     LPCWSTR lpFileName
 ) {
-    wchar_t debugMsg[512];
-    swprintf_s(debugMsg, L"[HOOK_DLL] GetFileAttributes called. FileName: %s", lpFileName ? lpFileName : L"null");
-    DebugPrintW(debugMsg);
-
     if (IsVBoxFilePath(lpFileName)) {
-        DebugPrint("[HOOK_DLL] BLOCKED: Attempt to access VirtualBox file!");
+        DebugPrint("[HOOK_DLL] BLOCKED (W): VirtualBox file probe denied");
+        SetLastError(ERROR_FILE_NOT_FOUND);
         return INVALID_FILE_ATTRIBUTES;
     }
-
     return original_GetFileAttributesW(lpFileName);
+}
+
+// ANSI mirror. Pafish vbox_sysfile1/2 and gensandbox_common_names call
+// GetFileAttributesA via pafish_exists_file; without this hook every
+// driver-file probe goes through to the real filesystem.
+DWORD WINAPI hook_GetFileAttributesA(
+    LPCSTR lpFileName
+) {
+    if (IsVBoxFilePathA(lpFileName)) {
+        DebugPrint("[HOOK_DLL] BLOCKED (A): VirtualBox file probe denied");
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return INVALID_FILE_ATTRIBUTES;
+    }
+    return original_GetFileAttributesA(lpFileName);
 }

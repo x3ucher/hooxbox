@@ -23,6 +23,12 @@ bool InitializeHyperVObjHooks();
 bool InitializeSystemHooks();
 bool InitializePowerHooks();
 bool InitializeServicesHooks();
+bool InitializeDebuggerHooks();
+bool InitializeTimeHooks();
+bool InitializeProcessInfoHooks();
+bool InitializeInputHooks();
+bool InitializeObjectInfoHooks();
+bool InitializeModuleHideHooks(HMODULE hSelf);
 
 // ---------------------------------------------------------------------------
 // WMI — IEnumWbemClassObject::Next hooks (separate function-body patches).

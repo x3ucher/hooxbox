@@ -13,7 +13,17 @@ struct Config {
     std::wstring logPath = L"debugger_wrapper.log"; // --log
     LogLevel     logLevel = LogLevel::Info;      // --level ERROR|INFO|DEBUG
     bool         alsoStdout = true;              // --no-stdout to disable
-    bool         enableCpuid = true;             // --no-cpuid
+    // CPUID interception is OFF by default.  Installing software BPs on every
+    // `cpuid` pattern in the target .exe is fragile — al-khaser's debug build
+    // executes some of those BPs in contexts where our masking handler
+    // either leaks the BP through (STATUS_BREAKPOINT crash, code 0x80000003)
+    // or fires at an address that isn't actually a `cpuid` (false positive
+    // in the 0x0F 0xA2 byte-pair scan).  The two al-khaser checks that
+    // motivated this code (cpuid_is_hypervisor / cpuid_hypervisor_vendor)
+    // already report GOOD on bare-metal hosts because the host's own CPU
+    // returns hypervisor=0 / empty vendor — masking is only needed inside
+    // an actual hypervisor guest, which can be opted into via --cpuid.
+    bool         enableCpuid = false;            // --cpuid to enable, --no-cpuid kept for back-compat
     bool         enableRdtsc = true;             // --no-rdtsc
     uint32_t     jitterMin = 80;                 // --jitter-min
     uint32_t     jitterMax = 200;                // --jitter-max

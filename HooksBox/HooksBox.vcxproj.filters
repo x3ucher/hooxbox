@@ -72,6 +72,24 @@
     <ClInclude Include="hooks\services_hooks.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="hooks\debugger_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\time_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\process_info_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\input_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\object_info_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\module_hide_hooks.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="filters\vbox_filters.cpp">
@@ -126,6 +144,24 @@
       <Filter>Исходные файлы</Filter>
     </ClCompile>
     <ClCompile Include="hooks\services_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\debugger_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\time_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\process_info_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\input_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\object_info_hooks.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\module_hide_hooks.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
   </ItemGroup>

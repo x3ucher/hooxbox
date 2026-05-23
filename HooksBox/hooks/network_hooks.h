@@ -10,14 +10,17 @@
 #include <winnetwk.h>
 
 typedef DWORD(WINAPI* WNetGetProviderNameW_t)(DWORD, LPWSTR, LPDWORD);
+typedef DWORD(WINAPI* WNetGetProviderNameA_t)(DWORD, LPSTR, LPDWORD);
 typedef ULONG(WINAPI* GetAdaptersInfo_t)(void*, PULONG);
 typedef ULONG(WINAPI* GetAdaptersAddresses_t)(ULONG, ULONG, PVOID, void*, PULONG);
 
 extern WNetGetProviderNameW_t original_WNetGetProviderNameW;
+extern WNetGetProviderNameA_t original_WNetGetProviderNameA;
 extern GetAdaptersInfo_t original_GetAdaptersInfo;
 extern GetAdaptersAddresses_t original_GetAdaptersAddresses;
 
 DWORD WINAPI hook_WNetGetProviderNameW(DWORD dwNetType, LPWSTR lpProviderName, LPDWORD lpBufferSize);
+DWORD WINAPI hook_WNetGetProviderNameA(DWORD dwNetType, LPSTR lpProviderName, LPDWORD lpBufferSize);
 ULONG WINAPI hook_GetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen);
 ULONG WINAPI hook_GetAdaptersAddresses(ULONG Family, ULONG Flags, PVOID Reserved, PIP_ADAPTER_ADDRESSES AdapterAddresses, PULONG SizePointer);
 
