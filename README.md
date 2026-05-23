@@ -2,21 +2,36 @@
 
 **HooksBox** is a sandbox-environment protection toolkit that conceals
 virtualization and debugger artifacts from malware-analysis-aware samples.
-Three components ship together:
+Masking is layered across **host configuration** (before the VM boots) and
+**in-guest runtime** (after the VM starts), with four components total:
 
-1. **`hooksbox.dll`** — user-mode API hook DLL (MinHook). Intercepts WinAPI /
-   COM / Nt* calls used by `pafish`, `al-khaser`, and similar detectors and
-   rewrites their results so they no longer match VirtualBox / VMware /
-   Hyper-V / QEMU patterns, nor expose the debugger or the injected DLL itself.
-2. **`DebuggerWrapper.exe`** — standalone user-mode debugger. Patches
-   `CPUID` and `RDTSC` instructions in the target via Windows Debug API +
-   INT3 soft breakpoints, then emulates them with masked results — defeats
-   the CPUID-vendor / HV-bit / `RDTSC→CPUID→RDTSC` timing tests that no API
-   hook can touch. `CPUID` masking is off by default (see notes below);
+1. **`vb-masquerade.ps1`** *(host, pre-boot)* — PowerShell script that
+   reconfigures a VirtualBox VM via `VBoxManage setextradata` / `modifyvm`.
+   Spoofs SMBIOS/DMI strings, ACPI OEM ID, disk model and serial,
+   network MAC OUI, disables paravirt provider, and tunes TSC mode so
+   `rdtsc-cpuid-rdtsc` deltas shrink. Profile-based (Dell / Lenovo / HP / Asus).
+   Runs once on the host **before booting** the VM; eliminates VBox
+   fingerprints at the firmware / hypervisor level, so the in-guest layers
+   have less to mask. Includes backup + `-Restore` rollback.
+2. **`hooksbox.dll`** *(guest, runtime)* — user-mode API hook DLL (MinHook).
+   Intercepts WinAPI / COM / Nt* calls used by `pafish`, `al-khaser`, and
+   similar detectors and rewrites their results so they no longer match
+   VirtualBox / VMware / Hyper-V / QEMU patterns, nor expose the debugger
+   or the injected DLL itself. Covers what `vb-masquerade.ps1` cannot reach
+   from outside the VM: Guest Additions registry keys / files / services,
+   `\Device\VBox*` kernel objects, debugger detection, DLL-injection hiding.
+3. **`DebuggerWrapper.exe`** *(guest, runtime)* — standalone user-mode
+   debugger. Patches `CPUID` and `RDTSC` instructions in the target via
+   Windows Debug API + INT3 soft breakpoints, then emulates them with
+   masked results — defeats the CPUID-vendor / HV-bit /
+   `RDTSC→CPUID→RDTSC` timing tests. Needed when `vb-masquerade.ps1`
+   cannot apply its TSC / HV-bit knobs because the host runs in NEM mode
+   (Hyper-V / WSL2 / VBS enabled). `CPUID` masking is off by default;
    `RDTSC` with virtual TSC + jitter is on.
-3. **`launcher.exe`** — front-end that combines the two: interactive prompts
-   ask whether to inject `hooksbox.dll` and/or attach `DebuggerWrapper`, then
-   spawns the target accordingly.
+4. **`launcher.exe`** *(guest, orchestration)* — front-end that combines
+   the runtime layers: interactive prompts ask whether to inject
+   `hooksbox.dll` and/or attach `DebuggerWrapper`, then spawns the target
+   accordingly.
 
 ## 🛡️ The problem
 
@@ -44,9 +59,16 @@ by default; CPUID is opt-in).
 
 ## ✨ The solution
 
-| Layer | What it masks | How |
-|---|---|---|
-| `hooksbox.dll` (registry/file) | `HKLM\HARDWARE\…`, `HKLM\SOFTWARE\Oracle\VirtualBox Guest Additions`, `HKLM\SYSTEM\…\Services\VBox*`, `vbox*.sys`, `\\.\VBoxMiniRdr*`, … (both W and A entry points). | MinHook trampolines on `Reg{Open,QueryValue,EnumKey}Ex{W,A}`, `GetFileAttributes{W,A}`, `CreateFile{W,A}`. |
+The full stack is **defence-in-depth**: each layer eliminates a different
+class of detection signals. When `vb-masquerade.ps1` is applied to the VM
+first, the in-guest layers (`hooksbox.dll`, `DebuggerWrapper.exe`) have
+substantially less work to do — many SMBIOS / ACPI / disk / MAC / CPUID
+checks already pass *at the source* and never even reach API-hook code.
+
+| Layer | Where it runs | What it masks | How |
+|---|---|---|---|
+| `vb-masquerade.ps1` | **Host**, before VM boot | SMBIOS/DMI (BIOS/System/Board/Chassis vendor + product + serial), ACPI OEM/Creator ID, disk model + serial (SATA + IDE), MAC OUI (replaces `08:00:27` with real Dell/Lenovo/HP/Asus OUI), hypervisor bit in CPUID(1).ECX[31] via `--paravirt-provider none`, TSC mode (`TSCTiedToExecution=1` shrinks `rdtsc-cpuid-rdtsc` delta), BIOS boot logo/menu. | `VBoxManage setextradata` (VBoxInternal/Devices/{pcbios,acpi,ahci,piix3ide}/...) + `VBoxManage modifyvm`. Backup of previous values for `-Restore`. |
+| `hooksbox.dll` (registry/file) | Guest, runtime | `HKLM\HARDWARE\…`, `HKLM\SOFTWARE\Oracle\VirtualBox Guest Additions`, `HKLM\SYSTEM\…\Services\VBox*`, `vbox*.sys`, `\\.\VBoxMiniRdr*`, … (both W and A entry points). | MinHook trampolines on `Reg{Open,QueryValue,EnumKey}Ex{W,A}`, `GetFileAttributes{W,A}`, `CreateFile{W,A}`. |
 | `hooksbox.dll` (process/window/net) | `vboxservice.exe` / `vboxtray.exe`, `VBoxTrayToolWnd*` windows, `08:00:27:*` MAC OUI, `VirtualBox Shared Folders` provider. | `Process32{First,Next}{W,A}`, `FindWindow{,Ex}{W,A}`, `GetAdapters{Info,Addresses}`, `WNetGetProviderName{W,A}`. |
 | `hooksbox.dll` (firmware/WMI) | Inflated SMBIOS table count (≥45 to pass al-khaser); ACPI table filtering; `Win32_BIOS`/`Win32_VideoController`/`Win32_PnPEntity`/`Win32_ComputerSystem`/`MSAcpi_ThermalZoneTemperature`/etc. rows. | `Get/EnumSystemFirmwareTable` + IWbemServices::ExecQuery / IEnumWbemClassObject::Next / IWbemClassObject::Get vtable hooks (per-class flag + shared dispatcher). |
 | `hooksbox.dll` (debugger) | `IsDebuggerPresent` → FALSE; `CheckRemoteDebuggerPresent` out-flag forced FALSE; `PEB->BeingDebugged`, `PEB->NtGlobalFlag`, `ProcessHeap->Flags/ForceFlags` zeroed in place; `NtQueryInformationProcess` (`ProcessDebugPort`/`Flags`/`ObjectHandle`) masked; `NtClose`/`CloseHandle` SEH-wrap to swallow STATUS_INVALID_HANDLE; `NtQueryObject(ObjectAllTypesInformation)` → `DebugObject.TotalNumberOfObjects = 0`. | API hooks + PEB patch. |
@@ -72,6 +94,12 @@ when running inside an actual hypervisor guest where leaf 1 / leaf
 
 ## 🔧 Key features
 
+- **Host-level VirtualBox masking** via `vb-masquerade.ps1` — replaces VBox
+  fingerprints in SMBIOS/DMI, ACPI, disk identity, MAC OUI, CPUID HV-bit
+  and TSC mode **before the VM boots**, so the guest OS itself sees a
+  Dell/Lenovo/HP/Asus-branded machine. Backup + `-Restore` rollback.
+  Detects NEM mode (Hyper-V/WSL2/VBS on host) and skips incompatible knobs
+  with a clear warning + bcdedit instructions.
 - **API hooking engine** — MinHook trampolines on dozens of WinAPI / COM /
   Nt* entry points, in both wide (`*W`) and ANSI (`*A`) flavours so legacy
   ANSI-only detectors (pafish is built without `UNICODE`) are covered.
@@ -98,12 +126,45 @@ when running inside an actual hypervisor guest where leaf 1 / leaf
 
 <img width="1314" height="713" alt="image" src="https://github.com/user-attachments/assets/46bf1f22-a8a8-4af4-9d95-4d967526f696" />
 
+### Recommended workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 1 — on the HOST, BEFORE booting the VM                         │
+│ ─────────────────────────────────────────────                       │
+│   .\vb-masquerade.ps1 -VM "MyAnalysisVM" -MaskProfile Dell          │
+│                                                                     │
+│ Removes VBox-specific SMBIOS / ACPI / disk / MAC / TSC / CPUID      │
+│ signatures at the hypervisor level. Reboot the VM to take effect.   │
+└─────────────────────────────────────────────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 2 — INSIDE the VM, when running a detector / sample            │
+│ ────────────────────────────────────────────────────                │
+│   .\launcher.exe                                                    │
+│   <interactive prompts for inject + debug>                          │
+│                                                                     │
+│ Runs target with hooksbox.dll (API/Nt-level masking) and optionally │
+│ DebuggerWrapper.exe (CPU-instruction masking).                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+`vb-masquerade.ps1` is a **one-time per VM** action (re-run only when
+switching profiles or after `-Restore`). The guest-side layers run **per
+target launch** through `launcher.exe`.
+
 ## 🚀 Getting started
 
 ### Prerequisites
 - Windows 10 / 11 (64-bit)
-- Visual Studio 2022 with the *Desktop development with C++* workload
-- No driver / admin elevation required for the default workflow
+- Visual Studio 2022 with the *Desktop development with C++* workload (for
+  building the C++ components)
+- VirtualBox 7.x (or 6.x — `vb-masquerade.ps1` falls back to old option
+  names automatically) — only needed for the host-side `vb-masquerade.ps1`
+- PowerShell 5.1+ — for `vb-masquerade.ps1`
+- No driver / admin elevation required for the runtime workflow.
+  `vb-masquerade.ps1` needs whatever rights `VBoxManage` itself needs
+  (usually none).
 
 ### Build
 
@@ -141,12 +202,67 @@ configurations.
 
 ## ▶️ Running
 
-All commands below assume you are in `x64\Debug\` (or `x64\Release\`). Every
-artifact looks for its peers in its own directory, so do **not** move them
-apart — `launcher.exe` resolves `hooksbox.dll` and `DebuggerWrapper.exe`
-next to itself.
+All in-VM commands below assume you are in `x64\Debug\` (or `x64\Release\`).
+Every artifact looks for its peers in its own directory, so do **not** move
+them apart — `launcher.exe` resolves `hooksbox.dll` and
+`DebuggerWrapper.exe` next to itself.
 
-### Launcher — interactive mode (recommended)
+### Step 1 — `vb-masquerade.ps1` (host, before VM boot)
+
+Run from a PowerShell prompt on the **host** machine (where VirtualBox is
+installed). The **VM must be powered off**; the script verifies this.
+
+```powershell
+# Interactive — script lists registered VMs and asks which to mask
+.\vb-masquerade.ps1
+
+# Explicit VM, default Dell profile
+.\vb-masquerade.ps1 -VM "Win10-Analysis"
+
+# Different host identity
+.\vb-masquerade.ps1 -VM "Win10-Analysis" -MaskProfile Lenovo
+
+# Preview the changes without applying them
+.\vb-masquerade.ps1 -VM "Win10-Analysis" -DryRun
+
+# Roll back to whatever the extradata was before the last apply
+.\vb-masquerade.ps1 -VM "Win10-Analysis" -Restore
+```
+
+Parameters:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `-VM <name\|UUID>` | (interactive picker) | Which VirtualBox VM to reconfigure. |
+| `-MaskProfile Dell\|Lenovo\|HP\|Asus` | `Dell` | Which real OEM identity to impersonate. Affects every DMI string + ACPI OEM ID + MAC OUI prefix. |
+| `-Restore` | off | Reapply the previously-saved extradata snapshot, undoing the masking. Snapshot is stored at `%USERPROFILE%\.vbox-mask-backups\<VM>.backup.txt`. |
+| `-DryRun` | off | Print the `VBoxManage` commands without executing. |
+
+The script touches **only the named VM**, never global VirtualBox settings,
+and always snapshots the prior values before modifying them. Reboot the VM
+once after running to make changes take effect.
+
+**NEM mode (Hyper-V / WSL2 / VBS on host)**: when Windows ships with a
+hypervisor active, VirtualBox cannot use its own `VBoxDrv` and falls back
+to NEM (Native Execution Manager) on top of Windows Hypervisor Platform.
+In NEM mode VirtualBox silently ignores some `VBoxInternal/*` keys
+(specifically `TM/TSCTiedToExecution` and `CPUM/EnableHVP`). The script
+detects this via `Win32_ComputerSystem.HypervisorPresent` and skips those
+keys with a warning + `bcdedit` instructions for disabling Hyper-V if
+full coverage is needed. Without NEM, all keys apply.
+
+What `vb-masquerade.ps1` does **not** cover (left for `hooksbox.dll`):
+
+- VirtualBox **Guest Additions** artefacts inside the VM (registry keys,
+  files in `C:\WINDOWS\system32\drivers\VBox*.sys` and friends, services
+  `VBoxService`/`VBoxTray`, processes, windows). Either don't install GA,
+  or run `hooksbox.dll` to mask them.
+- `\Device\VBox*` kernel object namespace.
+- Anti-debug detection (PEB, `IsDebuggerPresent`, `NtQueryInformationProcess`,
+  `NtClose` invalid-handle, `NtQueryObject` DebugObject, …).
+- Full `rdtsc-cpuid-rdtsc` timing in NEM mode (requires `DebuggerWrapper`).
+
+### Step 2 — Launcher — interactive mode (recommended)
 
 ```
 .\launcher.exe
@@ -220,16 +336,43 @@ End-to-end DEBUG log tail (CPUID on, in a VM):
 Recommended detectors:
 
 - [Al-Khaser](https://github.com/ayoubfaouzi/al-khaser) — broad anti-VM /
-  anti-sandbox / anti-debug. Run with `launcher.exe --debug-inject`.
+  anti-sandbox / anti-debug. Recommended order: first apply
+  `vb-masquerade.ps1` to the VM, then inside the guest run with
+  `launcher.exe --debug-inject al-khaser_x64.exe`.
 - [pafish](https://github.com/a0rtega/pafish) — paranoid fish; very close to
-  the threat model HooksBox is tuned against. Run with
-  `launcher.exe --inject` (no debugger needed) or `--debug-inject`.
+  the threat model HooksBox is tuned against. After `vb-masquerade.ps1`
+  most VBox checks already pass; inside the guest
+  `launcher.exe --inject pafish.exe` is usually enough (no
+  `DebuggerWrapper` needed because pafish skips most CPU-instruction
+  timings).
 - [VMDetect](https://github.com/PerryWerneck/vmdetect/) — second-opinion VM
   detector.
 
 Example al-khaser run with `hooksbox.dll` active:
 
 ![collblack](https://github.com/user-attachments/assets/6d55dcf9-ec3a-4cb7-ab18-4c51b9b2e896)
+
+### Effect of `vb-masquerade.ps1` on detector output
+
+With the script applied **before** boot, the following checks flip from
+BAD to OK *without any in-guest hook firing* (the data they read is
+already clean at the firmware / hypervisor level):
+
+| Detector | Check |
+|---|---|
+| pafish | `Scsi port → bus → target → LUN → 0 identifier` (was VBOX) |
+| pafish | `HKLM\HARDWARE\Description\System SystemBiosVersion` |
+| pafish | `HKLM\HARDWARE\Description\System SystemBiosDate` |
+| pafish | MAC starts with `08:00:27` |
+| al-khaser | `Win32_BIOS.SerialNumber`, `Win32_BaseBoard.Product`/`Manufacturer`, `Win32_ComputerSystem.Model`/`Manufacturer`, ACPI table strings |
+| al-khaser | `cpuid_is_hypervisor` (HV-bit cleared at VMM, so `--cpuid` opt-in not needed) |
+| al-khaser | `cpuid_hypervisor_vendor` (vendor leaves 0x40000000 zeroed) |
+| al-khaser | Various disk-model / serial WMI probes |
+| al-khaser | RDTSC timing — significantly reduced delta thanks to `TSCTiedToExecution=1` (mostly removes the need for `DebuggerWrapper`'s virtual TSC, but not 100%) |
+
+In **NEM mode** the TSC + HV-bit knobs are skipped; the remaining
+hypervisor leak surfaces are then cleaned up by `DebuggerWrapper.exe` on
+demand.
 
 ### Known limitations
 
@@ -244,13 +387,18 @@ Example al-khaser run with `hooksbox.dll` active:
   launched by `launcher.exe → DebuggerWrapper.exe`, not by `explorer.exe`.
   Not a masking miss; just a side effect of the chosen runner.
 - **CPUID masking in DebuggerWrapper** — opt-in (`--cpuid`); see rationale
-  above.
+  above. Usually unnecessary if `vb-masquerade.ps1` was applied (it clears
+  the HV-bit at the VMM via `--paravirt-provider none` + `EnableHVP=0`).
+- **`vb-masquerade.ps1` in NEM mode** — `TSCTiedToExecution` and
+  `EnableHVP` are silently skipped. Use `DebuggerWrapper.exe --rdtsc` for
+  TSC and `--cpuid` for HV-bit/vendor as fallback.
 
 ## 📁 Project structure
 
 ```
 hooxbox/
 ├── HooksBox.sln
+├── vb-masquerade.ps1               # → host-side pre-boot VBox config masking
 ├── HooksBox/                       # → hooksbox.dll
 │   ├── HooksBox.vcxproj
 │   ├── hook_dll_main.cpp           # DllMain — WMI worker bootstrap + module-hide layer

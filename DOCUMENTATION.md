@@ -5,15 +5,16 @@
 1. [Введение](#1-введение)
 2. [Угроза: методы обнаружения виртуальной среды](#2-угроза-методы-обнаружения-виртуальной-среды)
 3. [Общая архитектура](#3-общая-архитектура)
-4. [Компонент 1: hooksbox.dll](#4-компонент-1-hooksboxdll)
-5. [Компонент 2: DebuggerWrapper.exe](#5-компонент-2-debuggerwrapperexe)
-6. [Компонент 3: launcher.exe](#6-компонент-3-launcherexe)
-7. [Сборка и зависимости](#7-сборка-и-зависимости)
-8. [Запуск и тестирование](#8-запуск-и-тестирование)
-9. [Ограничения и нерешённые проверки](#9-ограничения-и-нерешённые-проверки)
-10. [История эволюции проекта](#10-история-эволюции-проекта)
-11. [Полная структура исходников](#11-полная-структура-исходников)
-12. [Глоссарий](#12-глоссарий)
+4. [Компонент 0: vb-masquerade.ps1 (host-side, pre-boot)](#4-компонент-0-vb-masqueradeps1-host-side-pre-boot)
+5. [Компонент 1: hooksbox.dll](#5-компонент-1-hooksboxdll)
+6. [Компонент 2: DebuggerWrapper.exe](#6-компонент-2-debuggerwrapperexe)
+7. [Компонент 3: launcher.exe](#7-компонент-3-launcherexe)
+8. [Сборка и зависимости](#8-сборка-и-зависимости)
+9. [Запуск и тестирование](#9-запуск-и-тестирование)
+10. [Ограничения и нерешённые проверки](#10-ограничения-и-нерешённые-проверки)
+11. [История эволюции проекта](#11-история-эволюции-проекта)
+12. [Полная структура исходников](#12-полная-структура-исходников)
+13. [Глоссарий](#13-глоссарий)
 
 ---
 
@@ -26,21 +27,35 @@
 - Исследование anti-VM-техник.
 - Тестирование детекторов (al-khaser, pafish) — насколько эффективно они различают живую систему от замаскированной.
 
-Проект состоит из трёх взаимодополняющих компонентов:
+Проект состоит из **четырёх** взаимодополняющих компонентов, разнесённых по двум средам — *хост* (где живёт VirtualBox) и *гость* (где запускается анализируемая программа):
 
-| Компонент | Тип | Роль |
-|---|---|---|
-| `hooksbox.dll` | Win32 DLL (x64) | Перехватывает WinAPI / COM / Nt-функции в целевом процессе. Подменяет результаты, скрывает следы VM и отладчика. |
-| `DebuggerWrapper.exe` | Win32 PE (x64) | Запускает целевой процесс под Windows Debug API. Перехватывает CPU-инструкции CPUID и RDTSC через программные точки останова (INT 3), эмулирует их с замаскированным результатом. |
-| `launcher.exe` | Win32 PE (x64) | Front-end. Интерактивно (или через CLI-флаги) спрашивает у пользователя, какие слои маскировки включить, и запускает цель. |
+| Компонент | Среда | Тип | Роль |
+|---|---|---|---|
+| `vb-masquerade.ps1` | **Хост**, до запуска VM | PowerShell-скрипт | Реконфигурирует VirtualBox-VM через `VBoxManage`: спуфит SMBIOS/DMI, ACPI OEM, серийники дисков, MAC OUI, отключает paravirt-провайдер, переключает TSC mode так, что rdtsc-cpuid-rdtsc дельта схлопывается. Profile-based (Dell / Lenovo / HP / Asus). Backup + `-Restore`. Запускается **один раз** перед загрузкой VM. |
+| `hooksbox.dll` | **Гость**, во время исполнения | Win32 DLL (x64) | Перехватывает WinAPI / COM / Nt-функции в целевом процессе. Покрывает то, что не достаёт `vb-masquerade.ps1` снаружи VM: артефакты Guest Additions, `\Device\VBox*` объекты, debug-детект, DLL-injection hiding. |
+| `DebuggerWrapper.exe` | **Гость**, во время исполнения | Win32 PE (x64) | Запускает целевой процесс под Windows Debug API. Перехватывает CPU-инструкции CPUID и RDTSC через программные точки останова (INT 3), эмулирует их с замаскированным результатом. Нужен преимущественно в NEM-mode (Hyper-V/WSL2/VBS на хосте), когда `vb-masquerade.ps1` не может применить TSC/HV-bit-параметры. |
+| `launcher.exe` | **Гость**, оркестрация | Win32 PE (x64) | Front-end для гостевых слоёв. Интерактивно (или через CLI-флаги) спрашивает у пользователя, какие из них включить, и запускает цель. |
 
-### 1.1. Почему именно три компонента
+### 1.1. Почему четыре компонента
 
-Маскировка идёт на разных уровнях абстракции, для каждого нужны разные инструменты:
+Маскировка идёт на разных уровнях абстракции и в разных средах — для каждого нужны разные инструменты:
 
-- **API-уровень** (`hooksbox.dll`) — большинство anti-VM-проверок ходят через стандартные WinAPI (`RegOpenKeyEx`, `GetFileAttributes`, `Process32Next`, WMI COM-интерфейсы и т.д.). Их можно перехватить пользовательским DLL через MinHook trampolines.
-- **CPU-инструкции** (`DebuggerWrapper.exe`) — `CPUID` возвращает hypervisor-vendor (`VBoxVBoxVBox`, `Microsoft Hv`, …) и HV-бит, `RDTSC` измеряет такты, и эти проверки идут *в обход* user-mode API. Перехватить их можно только через kernel-debug (тут — через user-mode Debug API + INT 3).
-- **Уровень оркестрации** (`launcher.exe`) — пользователю нужно одной командой выбрать комбинацию слоёв. Без launcher пришлось бы вручную запускать `DebuggerWrapper.exe` и заботиться об инжекции DLL.
+- **VMM / firmware-уровень, до загрузки VM** (`vb-masquerade.ps1`) — самая глубокая прослойка. Меняем то, что **гипервизор показывает** гостю: SMBIOS, ACPI, эмулируемые контроллеры дисков, MAC-адрес сетевого адаптера. Гость видит «правильную» аппаратную картину с самого начала, и многие WMI/Reg-вызовы внутри гостя уже возвращают чистые данные без всякой маскировки.
+- **API-уровень внутри гостя** (`hooksbox.dll`) — то, что нельзя поправить на VMM-уровне: артефакты установленных Guest Additions (реестр, файлы, службы, окна), debug-детектирование (PEB, IsDebuggerPresent, NtQueryInformationProcess), скрытие самой DLL-инжекции. Перехват через MinHook trampolines.
+- **CPU-инструкции внутри гостя** (`DebuggerWrapper.exe`) — `CPUID` и `RDTSC`. В нормальном режиме `vb-masquerade.ps1` решает их через `--paravirt-provider none` (снимает HV-бит) и `TSCTiedToExecution=1` (сжимает RDTSC-дельту). Но в **NEM-mode** (Hyper-V/WSL2/VBS активны на хосте) VirtualBox молча игнорирует эти ключи, и тогда `DebuggerWrapper` подбирает их вручную через INT 3 BP.
+- **Уровень оркестрации внутри гостя** (`launcher.exe`) — пользователю нужно одной командой выбрать комбинацию слоёв 2+3.
+
+### 1.2. Эффект многослойной защиты
+
+Когда `vb-masquerade.ps1` применён **до** загрузки VM, **внутри** гостя:
+
+- WMI `Win32_BIOS.SerialNumber` → возвращает «Dell Inc. SN-12AB3CD45E», не «VBOX»;
+- `GetSystemFirmwareTable('RSMB', …)` → возвращает SMBIOS со строками `Dell Inc.` / `OptiPlex 7090`, не с `VirtualBox`;
+- `GetAdaptersInfo` → MAC начинается с `00:14:22` (Dell OUI), не `08:00:27`;
+- `cpuid` с EAX=1 → ECX bit 31 = 0;
+- `rdtsc-cpuid-rdtsc` дельта → в пределах того, что бывает на bare-metal;
+
+…и пройти эти проверки **не требует никакой работы со стороны `hooksbox.dll`** или `DebuggerWrapper.exe`. Они нужны только для остальных категорий сигналов.
 
 ---
 
@@ -101,6 +116,22 @@ Pafish и al-khaser проверяют это всё.
 ## 3. Общая архитектура
 
 ```
+═══════════════════════════════════════════════════════════════════════
+HOST (Windows + VirtualBox), VM is POWERED OFF
+═══════════════════════════════════════════════════════════════════════
+┌────────────────────────────────────────────────────────────────────┐
+│  vb-masquerade.ps1                                                 │
+│  - VBoxManage setextradata VBoxInternal/Devices/pcbios/0/Config/…  │
+│  - VBoxManage setextradata VBoxInternal/Devices/acpi/0/Config/…    │
+│  - VBoxManage setextradata VBoxInternal/Devices/ahci|piix3ide/...  │
+│  - VBoxManage modifyvm --paravirt-provider none --macaddress1 …    │
+│  - Backup of previous extradata for -Restore                       │
+└────────────────────────────────────────┬───────────────────────────┘
+                                         │ (one-time, then VM boot)
+                                         ▼
+═══════════════════════════════════════════════════════════════════════
+GUEST (Windows running inside the masked VM)
+═══════════════════════════════════════════════════════════════════════
 ┌────────────────────┐  user runs   ┌─────────────────┐
 │  launcher.exe      │ ──────────► │  pafish.exe /   │
 │  - interactive UI  │              │  al-khaser.exe  │
@@ -126,19 +157,219 @@ Pafish и al-khaser проверяют это всё.
 └────────────────────────────────────┘
 ```
 
-Три комбинируемых сценария:
+### 3.1. Сценарии запуска
 
-1. **Только hooksbox** (`launcher.exe --inject`): `CreateProcess(CREATE_SUSPENDED)` → ремоут-инжекция DLL → `ResumeThread`. Нет отладчика, нет CPUID-маскировки.
-2. **Только DebuggerWrapper** (`launcher.exe --debug`): целевой процесс под отладчиком, только маскировка `RDTSC` (CPUID опционально через `--cpuid`).
-3. **Оба слоя** (`launcher.exe --debug-inject`): отладчик и DLL вместе. Маскировка работает максимально полно.
+Слои **комбинируемые**. Полный список реальных конфигураций:
 
-Pafish обычно достаточно режима `--inject` (он не делает RDTSC-тайминги). Al-khaser требует `--debug-inject` для прохождения большинства проверок.
+| Хост-конфиг | Гость-конфиг | Когда использовать |
+|---|---|---|
+| `vb-masquerade.ps1 -MaskProfile Dell` | `launcher.exe --inject pafish.exe` | Базовый: маскировка VBox-firmware на хосте + API-хуки на госте. Достаточно для pafish и большей части al-khaser. |
+| `vb-masquerade.ps1 -MaskProfile Dell` | `launcher.exe --debug-inject al-khaser.exe` | Полная: добавляется RDTSC-jitter через DebuggerWrapper. Нужно для al-khaser timing-секции. |
+| (без vb-masquerade) | `launcher.exe --debug-inject al-khaser.exe --cpuid` | NEM-mode на хосте: гость не получил TSC/HV-bit-маскировки от vb-masquerade, всё делает DebuggerWrapper. |
+| `vb-masquerade.ps1 -MaskProfile Dell` | `launcher.exe --inject pafish.exe` | На обычной (не NEM) машине pafish-у достаточно — он не делает RDTSC-тайминги. |
+| (без vb-masquerade) | `launcher.exe --debug-inject` | Если нет доступа к хосту (VM запущена кем-то другим), или цель — не VirtualBox, а VMware/QEMU. Только гостевые слои. |
+
+### 3.2. Распределение ответственности между слоями
+
+Один и тот же anti-VM сигнал может маскироваться на нескольких слоях. Расклад:
+
+| Сигнал детектора | vb-masquerade.ps1 (host) | hooksbox.dll (guest) | DebuggerWrapper.exe (guest) |
+|---|---|---|---|
+| WMI `Win32_BIOS.SerialNumber` = `VBOX-…` | ✅ исправлено в SMBIOS | ✅ fallback через WMI hook | — |
+| ACPI OEM string `VBOX___` | ✅ исправлено в ACPI | ✅ fallback через `GetSystemFirmwareTable` hook | — |
+| Disk `Identifier = VBOX HARDDISK` | ✅ исправлено в AHCI/IDE config | ✅ fallback через registry hook | — |
+| MAC OUI `08:00:27` | ✅ исправлено в `modifyvm --macaddress1` | ✅ fallback через `GetAdapters*` hook | — |
+| CPUID(1).ECX[31] HV-bit | ✅ `--paravirt-provider none` + `EnableHVP=0` | — | ✅ `--cpuid` opt-in |
+| RDTSC delta после CPUID | ✅ частично через `TSCTiedToExecution=1` | — | ✅ VirtualTsc jitter |
+| Guest Additions registry keys | ❌ снаружи не достать | ✅ registry hooks | — |
+| `\Device\VBox*` namespace | ❌ снаружи не достать | ✅ `NtQueryDirectoryObject` hook | — |
+| `IsDebuggerPresent`, PEB.BeingDebugged | ❌ снаружи не достать (отладчик — на госте) | ✅ API hook + PEB patch | — |
+| `NtQueryInformationProcess(ProcessDebugPort)` | ❌ | ✅ hook | — |
+| Hide hooksbox.dll from module enum | — | ✅ PEB.Ldr unlink | — |
+
+«✅ fallback» означает, что hooksbox.dll маскирует сигнал на API-уровне даже без vb-masquerade — но если vb-masquerade применён, эта маскировка избыточна (данные уже чистые). Зачем тогда оставлять? — потому что hooksbox должен работать и тогда, когда у пользователя нет доступа к хосту.
 
 ---
 
-## 4. Компонент 1: hooksbox.dll
+## 4. Компонент 0: vb-masquerade.ps1 (host-side, pre-boot)
 
-### 4.1. Назначение и общая структура
+### 4.1. Назначение
+
+`vb-masquerade.ps1` — PowerShell-скрипт, который **перед** загрузкой целевой VirtualBox-VM меняет её конфигурацию так, чтобы гостевая ОС видела «правильную» аппаратную картину Dell / Lenovo / HP / Asus-компьютера, а не дефолтную «innotek GmbH VirtualBox» / `08:00:27` MAC / `VBOX HARDDISK` диск / прочие VBox-специфичные строки.
+
+Главное отличие от `hooksbox.dll`: vb-masquerade **не работает изнутри гостя**, его не нужно инжектировать в процесс, и он эффективен против **любой** anti-VM проверки, читающей затронутые источники — даже если детектор обходит WinAPI и читает SMBIOS/ACPI через kernel-driver, через `/dev/mem` (если бы это был Linux-гость), через native `__rdmsr` и т.д.
+
+Скрипт построен поверх стандартного **`VBoxManage`** (CLI-утилита, которая идёт с VirtualBox) — никаких внешних библиотек, никаких патчей VMM-кода. Используются документированные публичные ключи `VBoxInternal/Devices/...` (которые VirtualBox читает при инициализации эмулируемых устройств) и стандартные `modifyvm`-флаги.
+
+### 4.2. Что меняется
+
+#### 4.2.1. SMBIOS / DMI (через `VBoxInternal/Devices/pcbios/0/Config/Dmi*`)
+
+| Группа | Ключи | Профиль Dell (по умолчанию) |
+|---|---|---|
+| BIOS | `DmiBIOSVendor`, `DmiBIOSVersion`, `DmiBIOSReleaseDate`, `DmiBIOSReleaseMajor/Minor`, `DmiBIOSFirmwareMajor/Minor` | `Dell Inc.`, `2.18.0`, `09/14/2023`, `2/18`, `1/0` |
+| System | `DmiSystemVendor`, `DmiSystemProduct`, `DmiSystemVersion`, `DmiSystemSerial`, `DmiSystemSKU`, `DmiSystemFamily`, `DmiSystemUuid` | `Dell Inc.`, `OptiPlex 7090`, `01`, *(случайный 10-hex serial)*, `0A2B`, `OptiPlex`, *(случайный GUID)* |
+| Board | `DmiBoardVendor`, `DmiBoardProduct`, `DmiBoardVersion`, `DmiBoardSerial`, `DmiBoardAssetTag`, `DmiBoardLocInChass` | `Dell Inc.`, `0HMHJ7`, `A00`, *(случайный)*, `Default string`, `Default string` |
+| Chassis | `DmiChassisVendor`, `DmiChassisVersion`, `DmiChassisSerial`, `DmiChassisAssetTag` | `Dell Inc.`, `1.0`, *(случайный)*, `Default string` |
+| Wipe | `DmiOEMVBoxVer`, `DmiOEMVBoxRev` | `<EMPTY>` (стираются — это самые очевидные маркеры VBox) |
+
+#### 4.2.2. ACPI (через `VBoxInternal/Devices/acpi/0/Config/Acpi*`)
+
+| Ключ | Профиль Dell |
+|---|---|
+| `AcpiOemId` | `DELL  ` (6 символов, как требует ACPI-spec) |
+| `AcpiCreatorId` | `DELL` (4 символа) |
+| `AcpiCreatorRev` | `2` |
+
+#### 4.2.3. Дисковые контроллеры (AHCI + IDE)
+
+| Ключ | Значение |
+|---|---|
+| `VBoxInternal/Devices/ahci/0/Config/Port0/ModelNumber` | `Samsung SSD 870 EVO 500GB` |
+| `…/Port0/FirmwareRevision` | `ES2OA60W` |
+| `…/Port0/SerialNumber` | *(случайный 10-hex)* |
+| `…/piix3ide/0/Config/PrimaryMaster/{ModelNumber,FirmwareRevision,SerialNumber}` | то же самое |
+
+Скрипт применяет ключи **для обоих контроллеров одновременно** — VirtualBox сам проигнорирует тот, который не активен в данной VM. Это убирает зависимость от того, на каком контроллере висит диск в этой конкретной VM.
+
+#### 4.2.4. CPU и TSC
+
+| Ключ | Значение | Эффект |
+|---|---|---|
+| `VBoxInternal/TM/TSCTiedToExecution` | `1` | `RDTSC` возвращает значение, привязанное к виртуальному времени выполнения, а не реальному host-TSC. Дельта `rdtsc-cpuid-rdtsc` становится близка к bare-metal. |
+| `VBoxInternal/CPUM/EnableHVP` | `0` | Запрет паравиртуализационного индикатора в CPUID(1).ECX[31]. |
+
+Эти два ключа **молча игнорируются в NEM-mode** — критически важно, см. 4.5.
+
+#### 4.2.5. `modifyvm`-параметры
+
+| Флаг | Значение | Эффект |
+|---|---|---|
+| `--paravirt-provider` | `none` | Гипервизор не объявляет себя через CPUID 0x40000000+. На bare-metal эти leaves тоже возвращают нули. |
+| `--macaddress1` | OUI профиля + 6 случайных hex | Для Dell: `00:14:22:xx:xx:xx`. Для Lenovo: `00:1F:16:...`. Для HP: `00:1B:78:...`. Для Asus: `00:1F:C6:...`. Всё — реальные OUI этих вендоров. |
+| `--bios-logo-{fade-in,fade-out,display-time}`, `--bios-boot-menu` | `off / off / 0 / disabled` | Спрятать VBox-логотип при загрузке VM, чтобы не было визуального признака даже на splash-экране. |
+
+Для старых версий VirtualBox (6.x) флаги были без дефисов (`--paravirtprovider`, `--bioslogofadein`). Скрипт сначала пробует 7.x-синтаксис, при ошибке откатывается на 6.x.
+
+### 4.3. Профили вендоров
+
+В скрипте захардкожены 4 «hosting identity»:
+
+| Профиль | BIOS Vendor | System Product | ACPI OemId | MAC OUI |
+|---|---|---|---|---|
+| `Dell` *(по умолчанию)* | `Dell Inc.` | `OptiPlex 7090` | `DELL  ` | `00:14:22` |
+| `Lenovo` | `LENOVO` | `20Y4S00100` (ThinkPad T14 Gen 2) | `LENOVO` | `00:1F:16` |
+| `HP` | `HP` | `HP EliteBook 840 G8` | `HPQOEM` | `00:1B:78` |
+| `Asus` | `American Megatrends Inc.` | `ROG STRIX B550-F GAMING` | `_ASUS_` | `00:1F:C6` |
+
+Выбор через флаг `-MaskProfile Dell|Lenovo|HP|Asus`. Все 4 — реальные конфигурации настоящих моделей, выглядят правдоподобно при cross-check'е (Vendor + Product + Family + BoardProduct согласованы).
+
+### 4.4. Backup / restore
+
+Перед первым изменением скрипт сохраняет текущие значения **всех ключей, к которым он собирается прикоснуться**, в файл:
+```
+%USERPROFILE%\.vbox-mask-backups\<VMName>.backup.txt
+```
+
+Формат:
+```
+# === user extradata (from enumerate) ===
+… дамп всех user-extradata через VBoxManage enumerate …
+
+# === VBoxInternal keys touched by this script ===
+Key: VBoxInternal/Devices/pcbios/0/Config/DmiBIOSVendor, Value: <unset>
+Key: VBoxInternal/Devices/pcbios/0/Config/DmiBIOSVersion, Value: <unset>
+…
+```
+
+`<unset>` означает, что ключ не был установлен (после restore он снова станет неустановленным). Любое другое значение восстанавливается через `VBoxManage setextradata <VM> <Key> <Value>`.
+
+Запуск с флагом `-Restore`:
+```powershell
+.\vb-masquerade.ps1 -VM "MyVM" -Restore
+```
+читает этот файл и проигрывает обратно. Скрипт сообщает кол-во восстановленных и очищенных ключей.
+
+### 4.5. Обнаружение NEM-mode и его эффект
+
+**NEM** (Native Execution Manager) — режим VirtualBox, в который он переходит, когда не может использовать собственный гипервизор (`VBoxDrv`). Это случается, когда на хосте активен **другой гипервизор**:
+- Hyper-V (`Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V`)
+- WSL2 (использует Hyper-V внутренне)
+- Windows Sandbox
+- Virtualization-Based Security (VBS) / HVCI / Credential Guard
+
+В NEM VirtualBox работает поверх **Windows Hypervisor Platform** (`WHvCreatePartition` и т.д.). При этом многие низкоуровневые `VBoxInternal/*` ключи **молча игнорируются** или могут даже вызвать boot-failure.
+
+Скрипт детектит NEM через:
+```powershell
+$hyperv = (Get-CimInstance -Namespace root\cimv2 -ClassName Win32_ComputerSystem).HypervisorPresent
+if ($hyperv) { $NemMode = $true }
+```
+
+Если NEM активен — выводит предупреждение и **пропускает** ключи из списка:
+```powershell
+$NemIncompatible = @(
+    'VBoxInternal/TM/TSCTiedToExecution',
+    'VBoxInternal/CPUM/EnableHVP'
+)
+```
+плюс активно стирает их (если они были установлены раньше), чтобы не оставить VM в полу-конфигурированном состоянии.
+
+Все остальные ключи (SMBIOS, ACPI, диски, MAC) в NEM работают нормально.
+
+Сообщение в логе при детекте:
+```
+NEM:         likely active (host has a hypervisor: Hyper-V/WSL2/VBS)
+             Some low-level params will be skipped to avoid boot failure.
+             For full coverage, run from admin PowerShell:
+               bcdedit /set hypervisorlaunchtype off
+             reboot, then re-run this script. Restore with:
+               bcdedit /set hypervisorlaunchtype auto
+```
+
+Что делать дальше:
+- **Если можно отключить Hyper-V** — `bcdedit /set hypervisorlaunchtype off`, reboot, перезапустить скрипт. Получится полная маскировка.
+- **Если Hyper-V нужен** (рабочая машина с WSL2, etc.) — оставить NEM. Гость получит большую часть маскировки (SMBIOS/ACPI/диски/MAC чистые), но HV-bit и RDTSC-дельта останутся видимыми. Доделать через `launcher.exe --debug-inject --cpuid`, где `DebuggerWrapper.exe` подберёт CPUID HV-bit и сглаживание RDTSC через свою INT 3-based маскировку.
+
+### 4.6. Структура `VBoxInternal/Devices/...` ключей
+
+Ключи имеют вид:
+```
+VBoxInternal/Devices/<device-name>/<instance>/Config/<param>
+```
+
+- `pcbios` — эмулируемый PC BIOS (предоставляет SMBIOS).
+- `acpi` — эмулируемый ACPI.
+- `ahci` — SATA-контроллер.
+- `piix3ide` — IDE-контроллер (PIIX3).
+- `<instance>` — номер устройства в VM, обычно `0`.
+- `<param>` — конкретный параметр.
+
+`Config/Dmi*` под `pcbios` — это поля SMBIOS-таблиц Type 0 (BIOS Information), Type 1 (System Information), Type 2 (Baseboard), Type 3 (Chassis), Type 11 (OEM Strings).
+
+При старте VM VBoxBIOS читает эти ключи и подставляет их значения в эмулируемый SMBIOS. Гость потом читает SMBIOS через `RSMB` provider и видит уже подменённые строки.
+
+### 4.7. Безопасность
+
+- Скрипт **не запускает** VM — только меняет её конфигурацию. VM должна быть **выключена** (`poweroff` / `aborted` / `saved`), иначе скрипт откажется работать (проверка через `VBoxManage showvminfo --machinereadable`).
+- Бэкап создаётся **до** любого `setextradata`. При сбое посередине можно гарантированно откатить.
+- Все изменения локализованы в **одной конкретной VM**. Глобальная конфигурация VirtualBox не трогается.
+- Параметр `-DryRun` печатает все команды без выполнения — для предпросмотра.
+
+### 4.8. Что НЕ покрывает vb-masquerade (и почему нужен hooksbox.dll)
+
+Снаружи VM нельзя поправить:
+- **Guest Additions внутри гостя** — установленные `VBoxService.exe`, `VBoxTray.exe`, драйвера `VBox*.sys`, ключи реестра `HKLM\SOFTWARE\Oracle\VirtualBox Guest Additions`. Решение: либо не устанавливать GA, либо использовать `hooksbox.dll`, который маскирует их API-уровневые проявления (`RegOpenKeyEx`, `GetFileAttributes`, `Process32Next`, …).
+- **`\Device\VBox*` kernel objects** в гостевой объектной namespace.
+- **Любая anti-debug проверка** — отладчик присоединяется к процессу **в госте**, vb-masquerade его не видит. Это полностью область `hooksbox.dll` + `DebuggerWrapper.exe`.
+- **WMI `Win32_NTEventlogFile` Sources** — список зарегистрированных источников логов. Если в VM установлены GA, они регистрируются (vboxvideo, VBoxVideoW8, VBoxWddm, VBoxSF, VBoxMouse, VBoxGuest, VBoxService). Эти строки лежат в гостевом реестре, vb-masquerade их не достанет.
+- **Inflated SMBIOS table count** — al-khaser проверяет, что SMBIOS-таблиц > 40. vb-masquerade меняет **содержимое** таблиц, но не их количество. Это делает `hooksbox.dll` через `GetSystemFirmwareTable` hook.
+
+---
+
+## 5. Компонент 1: hooksbox.dll
+
+### 5.1. Назначение и общая структура
 
 `hooksbox.dll` — это Win32 DLL, который инжектируется в целевой процесс через `LoadLibraryW`. Внутри он использует библиотеку **MinHook** (статическая `libMinHook.x64.lib`) для установки трамплинов на функции Windows API.
 
@@ -170,7 +401,7 @@ Pafish обычно достаточно режима `--inject` (он не де
 - Реализует `hook_XxxW`, `hook_XxxA` — детуры с той же сигнатурой.
 - Активируется через `Initialize{Module}Hooks()` в `hook_manager.cpp`, которая делает `MH_CreateHook` + `MH_EnableHook`.
 
-### 4.2. Точка входа: `hook_dll_main.cpp`
+### 5.2. Точка входа: `hook_dll_main.cpp`
 
 ```cpp
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -206,7 +437,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 3. **`InstallWmiHooks()`** — НЕ устанавливает сами WMI-хуки сразу (это вызовет deadlock на loader-lock). Вместо этого ставит ОДИН маленький патч на `CoCreateInstance` — trampoline, который сработает, когда target позже сам позовёт `CoCreateInstance(CLSID_WbemLocator)`. Подробнее в разделе 4.13.
 4. **`InitializeModuleHideHooks(hModule)`** — отвязывает hooksbox.dll от `PEB->Ldr` и ставит хук на `NtQueryVirtualMemory`. Делается ПОСЛЕ всех других хуков, потому что после отвязки никто не сможет найти DLL по имени.
 
-### 4.3. `hook_manager.{cpp,h}` — оркестратор
+### 5.3. `hook_manager.{cpp,h}` — оркестратор
 
 `hook_manager.cpp` — большой файл, содержащий:
 - `InitializeHooks()` — главный вход, по очереди вызывает все `Initialize*Hooks()`.
@@ -216,7 +447,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 - `Install{Class}Hook(IWbemClassObject*)` / `Remove{Class}Hook()` — установка/снятие per-class spoof через единый shared dispatcher.
 - `CleanupHooks()` — разворачивает все хуки при выгрузке DLL.
 
-#### 4.3.1. Порядок установки
+#### 5.3.1. Порядок установки
 
 ```cpp
 bool InitializeHooks() {
@@ -245,14 +476,14 @@ bool InitializeHooks() {
 
 `InitializeModuleHideHooks(hModule)` зовётся отдельно из DllMain — нужно `HMODULE` самого hooksbox.dll.
 
-### 4.4. Модуль реестра (`registry_hooks`)
+### 5.4. Модуль реестра (`registry_hooks`)
 
 Перехватывает три функции в W и A вариантах:
 - `RegOpenKeyExW/A`
 - `RegQueryValueExW/A`
 - `RegEnumKeyExW/A`
 
-#### 4.4.1. `RegOpenKeyExW/A`
+#### 5.4.1. `RegOpenKeyExW/A`
 
 ```cpp
 LSTATUS WINAPI hook_RegOpenKeyExW(HKEY hKey, LPCWSTR lpSubKey, ...) {
@@ -267,7 +498,7 @@ LSTATUS WINAPI hook_RegOpenKeyExW(HKEY hKey, LPCWSTR lpSubKey, ...) {
 
 ANSI-вариант делает то же через `IsVBoxRegistryKeyA` (массив `kVBoxRegistryPathsA` в `vbox_filters.cpp`).
 
-#### 4.4.2. `RegQueryValueExW/A`
+#### 5.4.2. `RegQueryValueExW/A`
 
 Сложнее: сначала читаем значение в **локальный временный буфер**, проверяем, что внутри (VBOX в `SystemBiosVersion`, `VIRTUALBOX` в `VideoBiosVersion`, `06/23/99` в `SystemBiosDate`, и т.д.). Если детектируется — формируем маскированный ответ и пишем в буфер вызывающего:
 
@@ -283,17 +514,17 @@ ANSI-вариант делает то же через `IsVBoxRegistryKeyA` (ма
 
 Если маскировать нечего — вызывается оригинальная функция повторно с буфером caller'а (два чтения — функция stateless, для `RegQueryValueEx` это безопасно).
 
-#### 4.4.3. `RegEnumKeyExW/A`
+#### 5.4.3. `RegEnumKeyExW/A`
 
 При перечислении подключей фильтрует те, чьи имена содержат `qemu`/`virtio`/`vmware`/`vbox`/`xen`/`vmw`/`virtual`. Возвращает `ERROR_NO_MORE_ITEMS` (как будто перечисление кончилось) — это скрывает виртуальный диск из enum'а контроллера.
 
-#### 4.4.4. Почему W *и* A варианты
+#### 5.4.4. Почему W *и* A варианты
 
 Pafish собран без определения макроса `UNICODE`, поэтому его `RegOpenKeyEx`, `GetFileAttributes`, `FindWindow`, `Process32First`, `WNetGetProviderName` — это ANSI-функции напрямую. Windows их **не** проксирует через W-варианты. Поэтому без ANSI-хуков pafish бы видел реальную систему.
 
 Это было главным прорывом отладки во время разработки: изначально все хуки были только W, и pafish их не замечал.
 
-### 4.5. Модуль файлов (`file_hooks`)
+### 5.5. Модуль файлов (`file_hooks`)
 
 Перехватывает только `GetFileAttributesW/A`. Этой функцией pafish и al-khaser проверяют существование драйверов VBox (`C:\WINDOWS\system32\drivers\VBoxGuest.sys` и т.д.) и других VBox-файлов.
 
@@ -309,7 +540,7 @@ DWORD WINAPI hook_GetFileAttributesW(LPCWSTR lpFileName) {
 
 `IsVBoxFilePath` сравнивает (case-insensitive substring) с массивами `VBOX_DRIVERS_PATHS` и `VBOX_SYSTEM_FILES_PATHS` из `config.h`. Это 5 драйверов и 14 системных файлов.
 
-### 4.6. Модуль устройств (`device_hooks`)
+### 5.6. Модуль устройств (`device_hooks`)
 
 `CreateFileW/A` — pafish открывает device-пути типа `\\.\VBoxMiniRdrDN`, `\\.\VBoxTrayIPC` через `CreateFile` с конкретной комбинацией флагов (`GENERIC_READ | FILE_SHARE_READ | OPEN_EXISTING | FILE_ATTRIBUTE_NORMAL`).
 
@@ -329,7 +560,7 @@ HANDLE WINAPI hook_CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD 
 
 ANSI-вариант (`hook_CreateFileA`) конвертирует имя в широкое и идёт по той же логике.
 
-### 4.7. Модуль окон (`window_hooks`)
+### 5.7. Модуль окон (`window_hooks`)
 
 `FindWindowW/A` и `FindWindowExW/A` — pafish использует `FindWindow(NULL, "VBoxTrayToolWnd")` и `FindWindow("VBoxTrayToolWndClass", NULL)` для определения присутствия трея VirtualBox Guest Additions.
 
@@ -343,7 +574,7 @@ HWND WINAPI hook_FindWindowW(LPCWSTR lpClassName, LPCWSTR lpWindowName) {
 
 Возврат `NULL` означает «такого окна нет».
 
-### 4.8. Модуль процессов (`processes_hooks`)
+### 5.8. Модуль процессов (`processes_hooks`)
 
 Перехватывает `Process32FirstW/A`, `Process32NextW/A`. Когда target итерирует процессы (через `CreateToolhelp32Snapshot` + `Process32First/Next`), мы пропускаем те, чьё имя совпадает с `VBoxService.exe`, `VBoxTray.exe`.
 
@@ -361,7 +592,7 @@ BOOL WINAPI hook_Process32NextW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) {
 
 Для ANSI: SDK с UNICODE не предоставляет отдельный `PROCESSENTRY32`-тип, аналог — `PROCESSENTRY32` aliased к `PROCESSENTRY32W`. Чтобы не менять `CharacterSet` проекта, в `processes_hooks.h` определён локальный `struct ProcessEntry32Ansi`, дублирующий бинарный layout (`CHAR szExeFile[MAX_PATH]` вместо `WCHAR`).
 
-### 4.9. Модуль сети (`network_hooks`)
+### 5.9. Модуль сети (`network_hooks`)
 
 Перехватывает три функции:
 
@@ -371,20 +602,20 @@ BOOL WINAPI hook_Process32NextW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) {
 
 Маскировка MAC: первые 3 байта (OUI) меняем на нули — это «нейтральный» OUI, не привязанный ни к какому вендору.
 
-### 4.10. Модуль прошивки (`firmwaretable_hooks`)
+### 5.10. Модуль прошивки (`firmwaretable_hooks`)
 
 Самый объёмный сценарий. Поддерживает два API:
 - `GetSystemFirmwareTable(Provider, TableID, Buffer, Size)` — получить таблицу.
 - `EnumSystemFirmwareTables(Provider, Buffer, Size)` — перечислить таблицы.
 
-#### 4.10.1. Провайдеры
+#### 5.10.1. Провайдеры
 
 Provider — это 4-байтовая сигнатура:
 - `'ACPI'` — ACPI таблицы (RSDP, FACP, DSDT, …)
 - `'RSMB'` — SMBIOS (raw)
 - `'FIRM'` / `'RAW '` — другие firmware-данные
 
-#### 4.10.2. ACPI
+#### 5.10.2. ACPI
 
 Для ACPI используется *подмена*: мы возвращаем синтетический `FakeAcpiTable` (определён в `config.h`):
 
@@ -409,7 +640,7 @@ Checksum пересчитывается на лету (`fakeTable.checksum = (BY
 
 `EnumSystemFirmwareTables` для ACPI возвращает фиксированный набор «обычных» сигнатур: `RSD `, `FACP`, `MSWS`, `DSDT`, `FACP`, `SSDT`.
 
-#### 4.10.3. SMBIOS
+#### 5.10.3. SMBIOS
 
 Для SMBIOS используется **двухступенчатый pass-through**:
 1. Сначала вызываем оригинал, получаем настоящие данные.
@@ -429,32 +660,32 @@ DWORD growBytes = need * 6;  // каждая пустышка 6 байт (header
 // сдвинуть end-of-table, записать пустышки на освободившееся место
 ```
 
-### 4.11. Модуль Hyper-V Object Directory (`hypervobj_hooks`)
+### 5.11. Модуль Hyper-V Object Directory (`hypervobj_hooks`)
 
 Перехватывает `NtOpenDirectoryObject` и `NtQueryDirectoryObject`. Через них al-khaser/pafish могут проверять наличие объектов в `\Device\` namespace, специфичных для Hyper-V/VBox: `VMBUS`, `VDRVROOT`, `VmGenerationCounter`, `VmGid`, `VPCI`, `VID`, `HvSocket`, `Hyper-V`, `VBox*`.
 
 Хук пост-обрабатывает результат `NtQueryDirectoryObject`: для каждого `OBJECT_DIRECTORY_INFORMATION` зануляет `Name.Length` и `TypeName.Length`, если имя матчит чёрный список. Это эффективно «прячет» элемент.
 
-### 4.12. Модуль системы (`system_hooks`)
+### 5.12. Модуль системы (`system_hooks`)
 
 Два хука:
 
 - **`SetupDiEnumDeviceInfo`** — при перечислении устройств через SetupAPI скрывает виртуальные. На первом вызове перечисляет всё, через `IsVirtualDevice` (читает `SPDRP_HARDWAREID` и ищет `vbox`/`vmware`/`qemu`/`virtual`) помечает виртуальные. Затем remap'ает индексы так, чтобы виртуальные пропускались.
 - **`GetDiskFreeSpaceExW`** — если суммарный размер диска меньше 80 GB, переписывает на 100 GB. Иначе оставляет как есть.
 
-### 4.13. Модуль питания (`power_hooks`)
+### 5.13. Модуль питания (`power_hooks`)
 
 Перехватывает `GetPwrCapabilities`. Al-khaser проверяет: если `(SystemS1 | S2 | S3 | S4) == 0 && ThermalControl == 0` — это VM. Хук принудительно ставит `SystemS3 = TRUE` и `ThermalControl = TRUE`, разрушая условие.
 
-### 4.14. Модуль служб (`services_hooks`)
+### 5.14. Модуль служб (`services_hooks`)
 
 Перехватывает `EnumServicesStatusExW`. После вызова оригинала пробегается по списку служб и для имён из чёрного списка (`VBoxWddm`, `VBoxSF`, `VBoxMouse`, `VBoxGuest`, `VBoxService`, `VBoxVideo`, `vmci`, `vmhgfs`, `vmmouse`, `vmmemctl`, `vmusb`, `vmusbmouse`, `vmx_svga`, `vmxnet`, `vmx86`) меняет первый символ на `_`. Это ломает case-insensitive сравнение в детекторе.
 
-### 4.15. Модуль WMI (`wmi_hooks`) — отдельная глава
+### 5.15. Модуль WMI (`wmi_hooks`) — отдельная глава
 
 WMI — это COM-интерфейсы, их нельзя перехватить классическим `MH_CreateHook` по имени функции. Вместо этого мы патчим **vtable-слоты** соответствующих интерфейсов.
 
-#### 4.15.1. Какие vtable-слоты
+#### 5.15.1. Какие vtable-слоты
 
 ```cpp
 constexpr int kVtblSlot_Next      = 4;   // IEnumWbemClassObject::Next
@@ -468,7 +699,7 @@ constexpr int kVtblSlot_ExecQuery = 20;  // IWbemServices::ExecQuery
 - `IWbemClassObject::Get` — 5-й метод (index 4).
 - `IWbemServices::ExecQuery` — 21-й метод (index 20).
 
-#### 4.15.2. Проблема loader-lock
+#### 5.15.2. Проблема loader-lock
 
 WMI требует COM (`CoInitializeEx` + `CoCreateInstance(CLSID_WbemLocator)`). `CoCreateInstance` внутри делает `LoadLibrary("wbemprox.dll")`, что **deadlock**ит loader-lock, если выполняется из `DllMain`. Поэтому установка WMI-хуков НЕ может быть синхронной из DllMain.
 
@@ -492,13 +723,13 @@ static HRESULT WINAPI hook_CoCreateInstance(REFCLSID rclsid, ..., REFIID riid, L
 }
 ```
 
-#### 4.15.3. Pin-патч модуля
+#### 5.15.3. Pin-патч модуля
 
 После установки хука на vtable-функцию мы вызываем `PinModuleContaining(target_address)` — это `GetModuleHandleExW` с флагом `GET_MODULE_HANDLE_EX_FLAG_PIN`. Этот флаг увеличивает счётчик ссылок модуля так, что он **никогда не выгружается** (даже если `CoFreeUnusedLibraries` решит почистить).
 
 Без пина: после очередного `CoUninitialize` `fastprox.dll` или `wbemprox.dll` может выгрузиться, и наш патч окажется в памяти, которая больше не используется. Все следующие вызовы пойдут на perekompiled-адрес (если DLL пере-загрузится) — мимо нашего хука.
 
-#### 4.15.4. Один shared dispatcher на все `Get`-хуки
+#### 5.15.4. Один shared dispatcher на все `Get`-хуки
 
 Все `IWbemClassObject` в `ROOT\CIMV2` резолвят `Get` к **одному** адресу. MinHook может поставить только одну точку патча на адрес. Поэтому мы используем единый `Hook_DispatcherGet`, который читает `__CLASS` объекта и диспетчеризует на per-class логику в зависимости от глобальных флагов:
 
@@ -510,7 +741,7 @@ bool g_BaseBoardEnabled, g_BusEnabled, g_PnPDeviceEnabled, g_BiosEnabled,
 
 `Install{Class}Hook` ставит соответствующий флаг в true (и активирует диспетчер при первом вызове). `Remove{Class}Hook` снимает флаг (и удаляет диспетчер, когда все флаги off).
 
-#### 4.15.5. Per-class spoof'ы
+#### 5.15.5. Per-class spoof'ы
 
 | Класс | Свойство | Спуфленное значение |
 |---|---|---|
@@ -528,7 +759,7 @@ bool g_BaseBoardEnabled, g_BusEnabled, g_PnPDeviceEnabled, g_BiosEnabled,
 | `MSAcpi_ThermalZoneTemperature` | `CurrentTemperature` | `300` |
 | `Win32_NTEventlogFile` | `Sources[]` | элементы из `{vboxvideo, VBoxVideoW8, VBoxWddm, VBoxSF, VBoxMouse, VBoxGuest, VBoxService}` → `Generic` |
 
-#### 4.15.6. Fake-row injection для пустых классов
+#### 5.15.6. Fake-row injection для пустых классов
 
 Анти-VM проверка: «если `Win32_Fan` пустой → это VM». Решение — впрыснуть синтетический `FakeWbemObject` (наш C++ класс, реализующий `IWbemClassObject`) при первом `Next`, если оригинал ничего не вернул.
 
@@ -556,7 +787,7 @@ static const wchar_t* kCriticalClasses[] = {
 
 `AddRef/Release` через `InterlockedIncrement/Decrement`. Все остальные методы возвращают `E_NOTIMPL`.
 
-#### 4.15.7. Фильтрация PnP
+#### 5.15.7. Фильтрация PnP
 
 `Hook_Next_FilterPnP` (для `Win32_PnPEntity` enumerator'а) пробегает каждый объект и через `ShouldFilterPnPObject` проверяет:
 - `Name` содержит `82801FB` / `82441FX` / `82371SB` / `OpenHCD` / `VBOX` → отфильтровать.
@@ -564,11 +795,11 @@ static const wchar_t* kCriticalClasses[] = {
 
 Отфильтрованный объект `Release`-ится, остальные сдвигаются в `apObjects`. Если после фильтрации в батче 0 объектов — повторяем `Next` (цикл `do { ... } while (out == 0)`), чтобы caller не получил неожиданное 0.
 
-### 4.16. Модуль детектора отладчика (`debugger_hooks`)
+### 5.16. Модуль детектора отладчика (`debugger_hooks`)
 
 Состоит из API-хуков и **прямого патча PEB/heap**:
 
-#### 4.16.1. `IsDebuggerPresent`
+#### 5.16.1. `IsDebuggerPresent`
 
 ```cpp
 BOOL WINAPI hook_IsDebuggerPresent(void) {
@@ -578,7 +809,7 @@ BOOL WINAPI hook_IsDebuggerPresent(void) {
 
 Просто возвращает FALSE. Это покрывает pafish `debug_isdebuggerpresent` и al-khaser `Checking IsDebuggerPresent API`.
 
-#### 4.16.2. `CheckRemoteDebuggerPresent`
+#### 5.16.2. `CheckRemoteDebuggerPresent`
 
 ```cpp
 BOOL WINAPI hook_CheckRemoteDebuggerPresent(HANDLE hProcess, PBOOL pbDebuggerPresent) {
@@ -590,7 +821,7 @@ BOOL WINAPI hook_CheckRemoteDebuggerPresent(HANDLE hProcess, PBOOL pbDebuggerPre
 
 Зовём оригинал (чтобы корректно отработать невалидный handle с `GetLastError()`), затем безусловно обнуляем out-параметр.
 
-#### 4.16.3. `PatchPebDebuggerFlags()`
+#### 5.16.3. `PatchPebDebuggerFlags()`
 
 Это **не** API-хук, а прямая запись в PEB и heap:
 
@@ -622,7 +853,7 @@ void PatchPebDebuggerFlags() {
 
 `PatchPebDebuggerFlags()` вызывается из `InitializeDebuggerHooks()` после установки `IsDebuggerPresent` хука.
 
-### 4.17. Модуль времени (`time_hooks`)
+### 5.17. Модуль времени (`time_hooks`)
 
 ```cpp
 static constexpr DWORD     kTickOffsetMs   = 1'800'000;       // 30 min
@@ -636,7 +867,7 @@ Pafish `gensandbox_uptime`: `GetTickCount() < 0xAFE74 ? TRUE : FALSE` (~12 ми�
 
 Сдвиг на 30 минут гарантирует прохождение. **Дельта между двумя вызовами `GetTickCount` остаётся корректной** (потому что offset константный), так что pafish `gensandbox_sleep_patched` (проверка `Sleep(500)` → дельта ≥ 450 мс) продолжает работать.
 
-### 4.18. Модуль ввода (`input_hooks`)
+### 5.18. Модуль ввода (`input_hooks`)
 
 ```cpp
 BOOL WINAPI hook_GetLastInputInfo(PLASTINPUTINFO plii) {
@@ -650,11 +881,11 @@ Al-khaser `lack_user_input`: цикл `for (i=0; i<128; ++i)`, в каждом �
 
 Решение: `GetLastInputInfo` возвращает `dwTime = (наш hooked GetTickCount) - 50`. Дельта = 50 < 100 — пройдено. Через `GetTickCount()` тут зовётся **наш хук** (не оригинал), что симметризует значения.
 
-### 4.19. Модуль process-info (`process_info_hooks`)
+### 5.19. Модуль process-info (`process_info_hooks`)
 
 Перехватывает три функции на ntdll/kernel32:
 
-#### 4.19.1. `NtQueryInformationProcess`
+#### 5.19.1. `NtQueryInformationProcess`
 
 Маскирует три класса информации:
 
@@ -671,7 +902,7 @@ Al-khaser `lack_user_input`: цикл `for (i=0; i<128; ++i)`, в каждом �
 
 Чтобы все три условия совпали, наш хук пишет в нужном порядке: сначала handle = 0, потом length = piLen. С overlapping буферами final-значение по адресу содержит `piLen` в младших 32 битах (что и проверяет al-khaser).
 
-#### 4.19.2. Self-handle detection без рекурсии
+#### 5.19.2. Self-handle detection без рекурсии
 
 ```cpp
 static bool IsSelfPseudoHandle(HANDLE h) {
@@ -685,7 +916,7 @@ static bool IsSelfPseudoHandle(HANDLE h) {
 
 Дополнительная защита — `thread_local int g_inQueryInformationHook` как guard от ре-вхождений, если в будущем добавятся helper-вызовы.
 
-#### 4.19.3. `NtClose` и `CloseHandle`
+#### 5.19.3. `NtClose` и `CloseHandle`
 
 Под отладчиком вызов `CloseHandle(invalid_handle)` приводит к kernel-генерируемому исключению `STATUS_INVALID_HANDLE` в процесс. Al-khaser оборачивает вызов в `__try/__except` и по факту срабатывания делает вывод о наличии отладчика.
 
@@ -708,7 +939,7 @@ BOOL WINAPI hook_CloseHandle(HANDLE Handle) {
 
 Exception, выброшенный из kernel, проходит через DebuggerWrapper (DBG_EXCEPTION_NOT_HANDLED), доходит до нашего `__except`, гасится. До al-khaser-кого `__except` уже не доходит.
 
-### 4.20. Модуль object-info (`object_info_hooks`)
+### 5.20. Модуль object-info (`object_info_hooks`)
 
 Перехватывает `NtQueryObject` с классом `ObjectAllTypesInformation = 3`. Эта функция возвращает массив всех типов объектов в kernel-space системы. Один из элементов — `DebugObject`. Под активной отладкой `TotalNumberOfObjects` у `DebugObject` > 0, что детектируется.
 
@@ -716,11 +947,11 @@ Exception, выброшенный из kernel, проходит через Debug
 
 Логика прохода по массиву нетривиальна — каждый элемент содержит inline-указатель на `TypeName.Buffer`, после буфера выровненный padding до `sizeof(void*)`. Идём `[record][buffer][align]…`.
 
-### 4.21. Модуль module-hide (`module_hide_hooks`)
+### 5.21. Модуль module-hide (`module_hide_hooks`)
 
 Два слоя: PEB.Ldr unlink + хуки на `GetMappedFileName`/`NtQueryVirtualMemory`.
 
-#### 4.21.1. `HideHooksboxModule(HMODULE hSelf)`
+#### 5.21.1. `HideHooksboxModule(HMODULE hSelf)`
 
 Алгоритм:
 1. Сохраняем `g_hooksboxBase = hSelf`, читаем PE-заголовок (DOS + NT), вычисляем `g_hooksboxEnd = base + SizeOfImage`.
@@ -741,7 +972,7 @@ Exception, выброшенный из kernel, проходит через Debug
 
 Что **не** покрывается одним только LDR-unlink — `GetMappedFileNameW`. Эта функция использует kernel-side `NtQueryVirtualMemory(MemorySectionName)`, который читает из таблицы маппингов секций, а не из PEB.Ldr.
 
-#### 4.21.2. Хук `NtQueryVirtualMemory`
+#### 5.21.2. Хук `NtQueryVirtualMemory`
 
 ```cpp
 LONG NTAPI hook_NtQueryVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress,
@@ -760,13 +991,13 @@ LONG NTAPI hook_NtQueryVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress,
 
 Когда target вызывает `GetMappedFileNameW(GetCurrentProcess(), addr_in_hooksbox, …)` — функция внутри делает syscall `NtQueryVirtualMemory(class=2, addr_in_hooksbox)`. Наш хук на ntdll-уровне видит, что адрес наш, возвращает `STATUS_INVALID_ADDRESS`. Снаружи это выглядит как «по этому адресу нет маппинга файла».
 
-#### 4.21.3. Почему хук именно на ntdll
+#### 5.21.3. Почему хук именно на ntdll
 
 Раньше были хуки на `psapi!GetMappedFileNameW/A`. Но на Win10/11 эта функция — forwarder в цепочке `psapi → kernel32 → kernelbase`. В зависимости от того, к какому линку привязал линкер каждого вызывающего, MinHook-патч на одном линке мог быть в обход. Хук на нижнем уровне (`ntdll!NtQueryVirtualMemory`) гарантирует, что любой путь через `GetMappedFileName*` проходит через нас.
 
 Старые хуки на `GetMappedFileNameW/A` оставлены как defense-in-depth — overhead нулевой, дополнительная страховка.
 
-### 4.22. `vbox_filters` — общие предикаты
+### 5.22. `vbox_filters` — общие предикаты
 
 Файл `filters/vbox_filters.{h,cpp}` содержит общие функции-проверки, которые использует несколько модулей хуков:
 
@@ -788,7 +1019,7 @@ LONG NTAPI hook_NtQueryVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress,
 
 ANSI-зеркала имеют отдельные таблицы паттернов в `vbox_filters.cpp` (`kVBoxRegistryPathsA`, `kVBoxFilePathsA`, `kVBoxDevicePathsA`).
 
-### 4.23. Логирование (`utils/log_utils`)
+### 5.23. Логирование (`utils/log_utils`)
 
 ```cpp
 void DebugPrint(const char* text);         // OutputDebugStringA
@@ -810,7 +1041,7 @@ WMI-хуки используют макросы:
 #define WMIHOOK_ERROR(msg) WriteFileLog(L"ERROR", (msg))
 ```
 
-### 4.24. `hooksbox.def` и экспортируемая функция
+### 5.24. `hooksbox.def` и экспортируемая функция
 
 Файл `hooksbox.def`:
 ```
@@ -829,7 +1060,7 @@ extern "C" __declspec(dllexport) void InitializeMyHooks() {
 
 В нормальном сценарии не используется — DllMain делает всё сам.
 
-### 4.25. `config.h` — таблицы
+### 5.25. `config.h` — таблицы
 
 Содержит массивы строк-паттернов:
 - `VBOX_REGISTRY_PATHS` — 9 wide-строк для матчинга путей реестра.
@@ -840,7 +1071,7 @@ extern "C" __declspec(dllexport) void InitializeMyHooks() {
 - `VIRTUALBOX_PROVIDER_NAME = L"VirtualBox Shared Folders"`.
 - Структуры `FakeAcpiTable`, `FakeSmbiosTable`.
 
-### 4.26. Полный список перехваченных функций
+### 5.26. Полный список перехваченных функций
 
 **kernel32.dll**: `IsDebuggerPresent`, `CheckRemoteDebuggerPresent`, `CloseHandle`, `GetTickCount`, `GetTickCount64`, `Process32First`, `Process32Next` (+ W варианты), `GetFileAttributesW`, `GetFileAttributesA`, `CreateFileW`, `CreateFileA`, `FindWindowW`, `FindWindowExW`, `FindWindowA`, `FindWindowExA`, `GetDiskFreeSpaceExW`, `GetSystemFirmwareTable`, `EnumSystemFirmwareTables`, `K32GetMappedFileNameW`, `K32GetMappedFileNameA`.
 
@@ -864,15 +1095,15 @@ extern "C" __declspec(dllexport) void InitializeMyHooks() {
 
 ---
 
-## 5. Компонент 2: DebuggerWrapper.exe
+## 6. Компонент 2: DebuggerWrapper.exe
 
-### 5.1. Назначение
+### 6.1. Назначение
 
 CPU-инструкции `CPUID` и `RDTSC` не проходят через user-mode WinAPI, их нельзя перехватить через MinHook. Чтобы замаскировать их, мы запускаем целевой процесс **под отладчиком** (через Windows Debug API), сканируем `.text` секцию на байт-паттерны этих инструкций (`0F A2` и `0F 31`), пишем `INT 3` (`0xCC`) поверх первого байта, и в debug-event loop обрабатываем `EXCEPTION_BREAKPOINT`:
 - Если адрес BP — наш, эмулируем оригинальную инструкцию с подменёнными результатами, восстанавливаем регистры, продвигаем `RIP` за инструкцию, продолжаем.
 - Иначе — отдаём управление дальше (target обрабатывает сам или падает).
 
-### 5.2. Архитектура
+### 6.2. Архитектура
 
 ```
 main.cpp
@@ -894,7 +1125,7 @@ main.cpp
        └─ Cleanup, print summary
 ```
 
-### 5.3. CLI и конфигурация (`main.cpp`, `config.{h,cpp}`)
+### 6.3. CLI и конфигурация (`main.cpp`, `config.{h,cpp}`)
 
 Структура `Config`:
 
@@ -933,7 +1164,7 @@ struct Config {
 
 **Почему CPUID off по умолчанию**: наивный байт-паттерн скан `0F A2` иногда находит false positive (когда эти байты — часть другой инструкции или данных). `INT 3` на таком адресе при срабатывании ломает выполнение, исключение «протекает» через debugger как `STATUS_BREAKPOINT (0x80000003)`, процесс падает. Эти CPU-проверки (`cpuid_is_hypervisor`, `cpuid_hypervisor_vendor`) на bare-metal хостах и так возвращают OK (HV-бит = 0, vendor пустой). Маскировка нужна только в реальном hypervisor-госте — туда включается через `--cpuid`.
 
-### 5.4. Логгер (`logger.{h,cpp}`)
+### 6.4. Логгер (`logger.{h,cpp}`)
 
 Класс-синглтон `Logger`. Методы:
 - `Init(path, level, alsoStdout)`
@@ -953,7 +1184,7 @@ Thread-safe (`CRITICAL_SECTION`), UTF-8 + BOM. Дублирование в stdou
 #define DBG_LOG_D(comp, fmt, ...) Logger::Instance().Log(LogLevel::Debug, comp, fmt, __VA_ARGS__)
 ```
 
-### 5.5. Сканер инструкций (`instruction_scanner.{h,cpp}`)
+### 6.5. Сканер инструкций (`instruction_scanner.{h,cpp}`)
 
 `ScanAndInstallBreakpoints(hProcess, imageBase, bps, wantCpuid, wantRdtsc, moduleName)`:
 
@@ -973,7 +1204,7 @@ Thread-safe (`CRITICAL_SECTION`), UTF-8 + BOM. Дублирование в stdou
      ```
 4. Логирует кол-во найденных паттернов и успешно установленных BP.
 
-### 5.6. Менеджер точек останова (`breakpoint_manager.{h,cpp}`)
+### 6.6. Менеджер точек останова (`breakpoint_manager.{h,cpp}`)
 
 `BreakpointManager`:
 ```cpp
@@ -992,9 +1223,9 @@ const BpInfo* Find(uintptr_t address) const;
 
 Восстановления оригинального байта нет — мы эмулируем инструкцию и продвигаем `RIP`, оригинал никогда не выполняется.
 
-### 5.7. Основной debug-event loop (`debugger_core.{h,cpp}`)
+### 6.7. Основной debug-event loop (`debugger_core.{h,cpp}`)
 
-#### 5.7.1. Запуск
+#### 6.7.1. Запуск
 
 ```cpp
 CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
@@ -1003,7 +1234,7 @@ CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
 
 `DEBUG_ONLY_THIS_PROCESS` — флаг, делающий наш процесс debugger'ом для target. Все debug-event-ы (создание потоков, загрузка DLL, исключения) поступают нам через `WaitForDebugEvent`.
 
-#### 5.7.2. Основной цикл
+#### 6.7.2. Основной цикл
 
 ```cpp
 while (running) {
@@ -1024,7 +1255,7 @@ while (running) {
 }
 ```
 
-#### 5.7.3. `CREATE_PROCESS_DEBUG_EVENT`
+#### 6.7.3. `CREATE_PROCESS_DEBUG_EVENT`
 
 При создании процесса:
 1. Сканируем target.exe на CPUID/RDTSC паттерны через `ScanAndInstallBreakpoints`.
@@ -1032,7 +1263,7 @@ while (running) {
 3. Запоминаем main thread в `threadHandles[de.dwThreadId] = info.hThread`.
 4. `mainTid = de.dwThreadId; mainThreadHandle = info.hThread;`
 
-#### 5.7.4. `EXCEPTION_DEBUG_EVENT` (`EXCEPTION_BREAKPOINT`)
+#### 6.7.4. `EXCEPTION_DEBUG_EVENT` (`EXCEPTION_BREAKPOINT`)
 
 ```cpp
 if (er.ExceptionCode == EXCEPTION_BREAKPOINT) {
@@ -1051,7 +1282,7 @@ if (er.ExceptionCode == EXCEPTION_BREAKPOINT) {
 
 Особый случай — первое срабатывание после старта: ntdll-loader всегда генерирует системный BP в `LdrDoDebuggerBreak`. Мы его специально пропускаем (`sawInitialSystemBp` флаг), потому что это нормальное поведение.
 
-#### 5.7.5. Inject-race fix
+#### 6.7.5. Inject-race fix
 
 Без фикса: после `ContinueDebugEvent` на `CREATE_PROCESS_DEBUG_EVENT` И главный поток target'а, И только что созданный injector-поток с `LoadLibraryW` становятся runnable. Они бегут параллельно. Быстрые target'ы (pafish — минимальный CRT, баннер сразу → `IsDebuggerPresent`) успевают исполнить anti-debug проверки **до** того, как DllMain нашего DLL завершится.
 
@@ -1065,7 +1296,7 @@ if (de.dwThreadId == injectorTid && mainThreadSuspended && mainThreadHandle) {
 }
 ```
 
-### 5.8. CPUID handler (`cpuid_handler.{h,cpp}`)
+### 6.8. CPUID handler (`cpuid_handler.{h,cpp}`)
 
 ```cpp
 CpuidRegs EmulateAndMaskCpuid(uint32_t leaf, uint32_t subleaf, CpuidRegs& hostRaw) {
@@ -1096,9 +1327,9 @@ CpuidRegs EmulateAndMaskCpuid(uint32_t leaf, uint32_t subleaf, CpuidRegs& hostRa
 
 **Почему `Rip += 1`, а не `+= 2`**: оригинальная инструкция CPUID — 2 байта (`0F A2`). После замены первого байта на `INT 3` (`CC`), при срабатывании BP kernel `auto-advance`-ит RIP на 1 (за `CC`). Получается RIP указывает на второй байт оригинала (`A2`). Чтобы пропустить остаток (1 байт), добавляем 1. Итог: RIP смотрит на инструкцию **после** оригинальной CPUID. Правильно.
 
-### 5.9. RDTSC handler (`rdtsc_handler.{h,cpp}`)
+### 6.9. RDTSC handler (`rdtsc_handler.{h,cpp}`)
 
-#### 5.9.1. `VirtualTsc`
+#### 6.9.1. `VirtualTsc`
 
 ```cpp
 class VirtualTsc {
@@ -1117,7 +1348,7 @@ private:
 
 `Tick()` приращивает `current_` на случайное число в диапазоне `[jitterMin, jitterMax]` (по умолчанию `[80, 200]`). Использует SplitMix64 RNG. Возвращает новое значение.
 
-#### 5.9.2. `HandleRdtscBp`
+#### 6.9.2. `HandleRdtscBp`
 
 ```cpp
 bool HandleRdtscBp(HANDLE hThread, VirtualTsc& vtsc, RunStats& stats) {
@@ -1135,7 +1366,7 @@ bool HandleRdtscBp(HANDLE hThread, VirtualTsc& vtsc, RunStats& stats) {
 
 Каждый RDTSC возвращает виртуальное значение, которое всегда монотонно растёт на случайное число тактов. Это разрушает RDTSC-тайминг проверки: разница `t2 - t1` всегда в пределах `[jitterMin, jitterMax]`, независимо от того, что произошло между ними. CPUID-внутри-RDTSC проверка не сможет различить «VM-exit от CPUID занял много тактов» от «обычная инструкция».
 
-### 5.10. Inject (`InjectDllViaRemoteThread`)
+### 6.10. Inject (`InjectDllViaRemoteThread`)
 
 Стандартный CreateRemoteThread paradigm:
 1. `GetFullPathNameW` — резолвим в абсолютный путь (относительный путь target не найдёт).
@@ -1147,7 +1378,7 @@ bool HandleRdtscBp(HANDLE hThread, VirtualTsc& vtsc, RunStats& stats) {
 
 `remoteTid` запоминается, в loop-е мы знаем, что `EXIT_THREAD` с этим TID — наш injector.
 
-### 5.11. Подтверждение успешной инжекции
+### 6.11. Подтверждение успешной инжекции
 
 Раньше мы ждали `GetExitCodeThread(injectorTid)` и проверяли != 0 (предполагая, что LoadLibraryW вернёт HMODULE). На современных Windows это не работает — kernel zero-ит RAX в exit-thunk потока как mitigation от info-disclosure. Поэтому `code` всегда 0.
 
@@ -1164,9 +1395,9 @@ if (!injectedDllPathLower.empty() && lowered == injectedDllPathLower) {
 
 ---
 
-## 6. Компонент 3: launcher.exe
+## 7. Компонент 3: launcher.exe
 
-### 6.1. Назначение
+### 7.1. Назначение
 
 Front-end. Без launcher'а пользователю пришлось бы:
 1. Знать про `DebuggerWrapper.exe` и его CLI-флаги.
@@ -1175,7 +1406,7 @@ Front-end. Без launcher'а пользователю пришлось бы:
 
 Launcher либо интерактивно спрашивает («Inject?», «Debug?»), либо принимает флаги.
 
-### 6.2. Режимы
+### 7.2. Режимы
 
 | Inject | Debug | Режим | Что делается |
 |---|---|---|---|
@@ -1184,7 +1415,7 @@ Launcher либо интерактивно спрашивает («Inject?», «
 | n | y | **debug** | `DebuggerWrapper.exe --target <path>` |
 | y | y | **debug+inject** | `DebuggerWrapper.exe --target <path> --inject <hooksbox.dll>` |
 
-### 6.3. Раскладка CLI
+### 7.3. Раскладка CLI
 
 ```
 launcher.exe                              # интерактивные prompts
@@ -1200,7 +1431,7 @@ launcher.exe --debug-inject pafish.exe --cpuid --level DEBUG --log run.log
                                        └────── forwarded ────────┘
 ```
 
-### 6.4. Архитектурная проверка (`ReadPeMachineArch`)
+### 7.4. Архитектурная проверка (`ReadPeMachineArch`)
 
 Перед injection launcher читает PE-headers и target.exe, и hooksbox.dll. Если архитектуры не совпадают — сразу ошибка:
 ```
@@ -1213,7 +1444,7 @@ launcher.exe --debug-inject pafish.exe --cpuid --level DEBUG --log run.log
 
 Это предотвращает запутанные диагностики после неудачной инжекции.
 
-### 6.5. `InjectIntoProcess` (для не-debug режима)
+### 7.5. `InjectIntoProcess` (для не-debug режима)
 
 ```cpp
 LPVOID remoteMemory = VirtualAllocEx(hProcess, NULL, pathSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
@@ -1227,7 +1458,7 @@ WaitForSingleObject(hThread, INFINITE);
 
 Та же причина для проверки через `Module32First/Next`, что и в DebuggerWrapper'е (kernel zero-ит RAX).
 
-### 6.6. `RunDebugMode`
+### 7.6. `RunDebugMode`
 
 Составляется команда:
 ```
@@ -1238,23 +1469,23 @@ WaitForSingleObject(hThread, INFINITE);
 
 ---
 
-## 7. Сборка и зависимости
+## 8. Сборка и зависимости
 
-### 7.1. Структура solution
+### 8.1. Структура solution
 
 `HooksBox.sln` — три проекта:
 - `HooksBox.vcxproj` → `hooksbox.dll`
 - `Launcher.vcxproj` → `launcher.exe`
 - `DebuggerWrapper.vcxproj` → `DebuggerWrapper.exe`
 
-### 7.2. Версии
+### 8.2. Версии
 
 - Visual Studio 2022, PlatformToolset v143
 - Windows SDK 10.0 (любая актуальная подверсия)
 - Стандарт C++17
 - Конфигурации: Debug|x64, Release|x64 (Win32 не поддерживается)
 
-### 7.3. Препроцессорные определения (Debug|x64)
+### 8.3. Препроцессорные определения (Debug|x64)
 
 ```
 _DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WINSOCKAPI_;WINDOWS_IGNORE_PACKING_MISMATCH;
@@ -1264,7 +1495,7 @@ _DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WINSOCKAPI_;WINDOWS_IGNORE_PACKING
 
 `NOMINMAX` — отключает `min`/`max` макросы из windows.h, иначе ломается `std::min`/`std::max`.
 
-### 7.4. Линковка
+### 8.4. Линковка
 
 `HooksBox.vcxproj`:
 ```xml
@@ -1279,13 +1510,13 @@ _DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WINSOCKAPI_;WINDOWS_IGNORE_PACKING
 - `iphlpapi.lib`, `ws2_32.lib`, `mpr.lib` — в `network_hooks.cpp`
 - `shlwapi.lib` — в `services_hooks.cpp` и `wmi_hooks.cpp`
 
-### 7.5. MinHook
+### 8.5. MinHook
 
 Vendored как статическая `tools/MinHook/lib/libMinHook.x64.lib` + headers в `tools/MinHook/include/MinHook.h`.
 
 Препроцессор-define `MH_STATIC` обязателен (иначе CRT думает, что MinHook DLL-импорт). Объявлен `#define MH_STATIC` непосредственно перед `#include "MinHook.h"` в `hook_manager.cpp`.
 
-### 7.6. Особенности сборки
+### 8.6. Особенности сборки
 
 **Сборка через `.sln`, не через `.vcxproj`**: переменная `$(SolutionDir)` определена только при сборке через solution. При `msbuild HooksBox.vcxproj …` напрямую путь `$(SolutionDir)tools\MinHook\include` резолвится в пустоту, MinHook.h не находится.
 
@@ -1296,7 +1527,7 @@ msbuild HooksBox.sln /p:Configuration=Debug /p:Platform=x64
 
 Или из VS: Build → Build Solution.
 
-### 7.7. Выходные артефакты
+### 8.7. Выходные артефакты
 
 В `x64\Debug\` (или `x64\Release\`):
 - `hooksbox.dll` (+ `hooksbox.exp`, `hooksbox.lib` для линковки)
@@ -1307,14 +1538,43 @@ msbuild HooksBox.sln /p:Configuration=Debug /p:Platform=x64
 
 ---
 
-## 8. Запуск и тестирование
+## 9. Запуск и тестирование
 
-### 8.1. Подготовка
+### 9.1. Подготовка
 
 1. Соберите solution в `Debug|x64` (или `Release|x64`).
-2. Скопируйте 3 файла (`hooksbox.dll`, `launcher.exe`, `DebuggerWrapper.exe`) в одну директорию вместе с целевым `.exe` (pafish, al-khaser, или любой другой).
+2. Скопируйте `vb-masquerade.ps1` на **хост** (где установлен VirtualBox).
+3. Скопируйте 3 файла (`hooksbox.dll`, `launcher.exe`, `DebuggerWrapper.exe`) **внутрь VM**, в одну директорию вместе с целевым `.exe` (pafish, al-khaser, или любой другой).
 
-### 8.2. Интерактивный запуск
+### 9.2. Полный сценарий запуска (host + guest)
+
+#### Шаг 1 — на ХОСТЕ, до загрузки VM
+
+VM должна быть **выключена** (`poweroff`, `aborted` или `saved`):
+
+```powershell
+# Маскировка под Dell OptiPlex 7090 (по умолчанию)
+.\vb-masquerade.ps1 -VM "Win10-Analysis"
+
+# Под другую модель
+.\vb-masquerade.ps1 -VM "Win10-Analysis" -MaskProfile Lenovo
+
+# Сухой прогон — увидеть, что бы применилось, не применяя
+.\vb-masquerade.ps1 -VM "Win10-Analysis" -DryRun
+
+# Откатить ранее применённую маскировку
+.\vb-masquerade.ps1 -VM "Win10-Analysis" -Restore
+```
+
+Скрипт сохраняет бэкап в `%USERPROFILE%\.vbox-mask-backups\<VMName>.backup.txt`.
+
+Если на хосте активен Hyper-V / WSL2 / VBS, скрипт обнаружит NEM-mode и выведет предупреждение со списком пропущенных ключей. Часть низкоуровневых параметров (`TSCTiedToExecution`, `EnableHVP`) не применится — их доделает `DebuggerWrapper.exe` уже внутри VM.
+
+После применения **запустить VM** — гость стартует с уже подменённой firmware.
+
+#### Шаг 2 — внутри ВМ
+
+### 9.3. Интерактивный запуск (внутри VM)
 
 ```
 C:\Users\user\Desktop> launcher.exe
@@ -1338,7 +1598,7 @@ Mask CPUID/RDTSC via DebuggerWrapper (instruction layer)? [y/N]: y
 ...
 ```
 
-### 8.3. CLI
+### 9.4. CLI
 
 ```powershell
 .\launcher.exe --inject pafish64.exe
@@ -1346,7 +1606,7 @@ Mask CPUID/RDTSC via DebuggerWrapper (instruction layer)? [y/N]: y
 .\launcher.exe --debug-inject some.exe --cpuid --level DEBUG --log run.log
 ```
 
-### 8.4. Проверочные детекторы
+### 9.5. Проверочные детекторы
 
 **Pafish** ([github.com/a0rtega/pafish](https://github.com/a0rtega/pafish)):
 - Конкретно нацелен на anti-sandbox / anti-VM проверки.
@@ -1358,7 +1618,7 @@ Mask CPUID/RDTSC via DebuggerWrapper (instruction layer)? [y/N]: y
 - Тяжёлый CRT, много категорий перед debug-секцией.
 - Запускать с `--debug-inject` (нужны и хуки, и DebuggerWrapper для RDTSC).
 
-### 8.5. Ожидаемые результаты
+### 9.6. Ожидаемые результаты
 
 После всех маскировок:
 
@@ -1369,9 +1629,29 @@ Mask CPUID/RDTSC via DebuggerWrapper (instruction layer)? [y/N]: y
 - `Checking If Parent Process is explorer.exe` — артефакт запуска через launcher chain.
 - ещё пара экзотических проверок в timing-секции.
 
-См. раздел 9.
+См. раздел 10.
 
-### 8.6. Логи для диагностики
+#### Эффект `vb-masquerade.ps1` на лог детектора
+
+С применённым на хосте скриптом **до** загрузки VM, следующие проверки переходят из BAD в OK *без какой-либо работы гостевых хуков* — данные, которые они читают, чисты уже на уровне firmware/hypervisor:
+
+| Детектор | Проверка | Источник чистоты |
+|---|---|---|
+| pafish | `Scsi port → bus → target → LUN → 0 identifier` (был `VBOX`) | `Devices/ahci/0/Config/Port0/SerialNumber` |
+| pafish | `HKLM\HARDWARE\Description\System SystemBiosVersion` | `Devices/pcbios/0/Config/DmiBIOSVersion` |
+| pafish | `HKLM\HARDWARE\Description\System SystemBiosDate` | `Devices/pcbios/0/Config/DmiBIOSReleaseDate` |
+| pafish | MAC начинается с `08:00:27` | `modifyvm --macaddress1` |
+| al-khaser | `Win32_BIOS.SerialNumber`, `Win32_BaseBoard.Product`/`Manufacturer`, `Win32_ComputerSystem.Model`/`Manufacturer` | `Devices/pcbios/0/Config/Dmi*` |
+| al-khaser | ACPI table strings | `Devices/acpi/0/Config/Acpi*` |
+| al-khaser | `cpuid_is_hypervisor` (HV-bit) | `--paravirt-provider none` + `CPUM/EnableHVP=0` |
+| al-khaser | `cpuid_hypervisor_vendor` (leaves 0x40000000+) | `--paravirt-provider none` |
+| al-khaser | RDTSC-тайминги (частично) | `TM/TSCTiedToExecution=1` |
+
+Это означает: гостевые слои (`hooksbox.dll`, `DebuggerWrapper.exe`) **не делают двойную работу**. Их код для маскировки этих сигналов остаётся как fallback (на случай, если кто-то использует hooksbox без vb-masquerade — например, в VM, к которой нет административного доступа), но при правильной двухслойной конфигурации он просто не активируется (данные уже корректны до того, как мы что-то перехватываем).
+
+В **NEM-mode** часть этих сигналов всё ещё будет утекать (TSC + HV-bit пропускаются скриптом). Их нужно дополнительно покрывать через `launcher.exe --debug-inject --cpuid`.
+
+### 9.7. Логи для диагностики
 
 `hooksbox.dll` пишет:
 - `sandbox_evasion.log` (UTF-8 + BOM) в CWD процесса — все WMI-хуки и важные операции.
@@ -1384,9 +1664,9 @@ Mask CPUID/RDTSC via DebuggerWrapper (instruction layer)? [y/N]: y
 
 ---
 
-## 9. Ограничения и нерешённые проверки
+## 10. Ограничения и нерешённые проверки
 
-### 9.1. `Local Descriptor Table location` (al-khaser)
+### 10.1. `Local Descriptor Table location` (al-khaser)
 
 `ldt_trick()` в al-khaser использует CPU-инструкцию `sldt` для чтения LDTR. На x64 user-mode эта инструкция **не вызывает trap** и нет API-обёртки.
 
@@ -1394,7 +1674,7 @@ Mask CPUID/RDTSC via DebuggerWrapper (instruction layer)? [y/N]: y
 
 Дополнительная проблема: сам al-khaser тест **некорректен** — он сравнивает результат с магическим значением `0xdead0000`. На реальной bare-metal Windows `sldt` тоже не возвращает `0xdead0000`. То есть тест возвращает BAD даже без VM. Это баг al-khaser, не наш.
 
-### 9.2. `IsParentExplorerExe` (al-khaser)
+### 10.2. `IsParentExplorerExe` (al-khaser)
 
 `IsParentExplorerExe()` проверяет, является ли родительский процесс `explorer.exe`. Получает родительский PID через `NtQueryInformationProcess(GetCurrentProcess(), ProcessBasicInformation)` → `pbi.ParentProcessId`. Затем `OpenProcess` + `GetModuleFileNameExW` для пути.
 
@@ -1406,31 +1686,43 @@ Mask CPUID/RDTSC via DebuggerWrapper (instruction layer)? [y/N]: y
 
 Не сделано, потому что низкий приоритет (узкоспецифичная проверка одного детектора).
 
-### 9.3. CPUID маскировка off by default
+### 10.3. CPUID маскировка off by default
 
 См. 5.3.
 
-### 9.4. RDTSC false positive
+### 10.4. RDTSC false positive
 
 Скан байт `0F 31` тоже может встретить false-positive (например, внутри строки или в data-секции, если она помечена как exec). Сейчас в проекте не наблюдалось проблем, но теоретически возможно.
 
 Защита от утечки `STATUS_BREAKPOINT` (для CPUID мы её увидели и отключили маскировку): DebuggerWrapper в случае foreign BP делает `DBG_EXCEPTION_NOT_HANDLED` и kernel дальше доставляет исключение target'у. Если target не обрабатывает — крэш.
 
-### 9.5. Packed/unpacked payloads
+### 10.5. Packed/unpacked payloads
 
 Скан `.text` происходит один раз при `CREATE_PROCESS_DEBUG_EVENT`. Если target позже распакует код в новую страницу и выполнит CPUID/RDTSC оттуда — мы это не отловим.
 
 Решение (не реализовано): хук на `VirtualProtect` с `PAGE_EXECUTE_*` для повторного сканирования.
 
-### 9.6. CR4.TSD user-mode trap
+### 10.6. CR4.TSD user-mode trap
 
 Если target использует `CR4.TSD = 1`, то RDTSC в user-mode будет вызывать `#GP`. Маскировать это можно только из kernel-driver — out of scope.
 
+### 10.7. `vb-masquerade.ps1` в NEM-mode
+
+Когда на хосте активен сторонний гипервизор (Hyper-V / WSL2 / VBS / Windows Sandbox), VirtualBox работает в **NEM-mode** поверх Windows Hypervisor Platform. В этом режиме два ключевых параметра скрипта **молча игнорируются**:
+- `VBoxInternal/TM/TSCTiedToExecution` — RDTSC возвращает host-TSC, не масштабированный → дельта `rdtsc-cpuid-rdtsc` снова заметна детектору.
+- `VBoxInternal/CPUM/EnableHVP` — HV-бит в CPUID(1).ECX[31] не очищается на VMM-уровне.
+
+Скрипт детектит NEM (через `Win32_ComputerSystem.HypervisorPresent`) и пропускает эти ключи с подробным предупреждением.
+
+Решения:
+1. **Отключить Hyper-V на хосте** — `bcdedit /set hypervisorlaunchtype off` + reboot. После этого все ключи скрипта применяются. Включить обратно — `bcdedit /set hypervisorlaunchtype auto`.
+2. **Доделать в госте через DebuggerWrapper** — запустить `launcher.exe --debug-inject --cpuid <target>`. `DebuggerWrapper.exe` через свои INT 3 BP подберёт CPUID HV-bit и сгладит RDTSC через `VirtualTsc`. Но это вводит CPUID-маскировку (отключённую по умолчанию из-за false-positive рисков, см. 10.3).
+
 ---
 
-## 10. История эволюции проекта
+## 11. История эволюции проекта
 
-### 10.1. Этап 1: базовая маскировка (стартовая версия)
+### 11.1. Этап 1: базовая маскировка (стартовая версия)
 
 Изначальная версия проекта содержала:
 - `hooksbox.dll` с хуками на: реестр (W only), файлы (W only), окна (W only), процессы (W only), сеть (Get*Adapters + WNetGetProviderNameW), firmware (SMBIOS/ACPI), Hyper-V dir, system (SetupDi + disk), power, services, WMI (полный набор vtable-хуков с fake-row injection — это была самая сложная часть).
@@ -1441,7 +1733,7 @@ DebuggerWrapper уже существовал с базовой CPUID/RDTSC ма
 
 В этом состоянии **al-khaser** проходил основную часть VM-проверок, но pafish детектировал почти всё — потому что pafish собран без UNICODE и зовёт только A-варианты функций, которых не было.
 
-### 10.2. Этап 2: ANSI-поддержка и debug-маскировка
+### 11.2. Этап 2: ANSI-поддержка и debug-маскировка
 
 Что добавлено:
 - **ANSI-зеркала** во всех существующих модулях: `RegOpenKeyExA`/`RegQueryValueExA`/`RegEnumKeyExA`, `GetFileAttributesA`, `FindWindowA`/`Ex`, `Process32First/NextA`, `WNetGetProviderNameA`. Соответственно появились ANSI-предикаты в `vbox_filters` (`IsVBoxRegistryKeyA` и др.).
@@ -1451,7 +1743,7 @@ DebuggerWrapper уже существовал с базовой CPUID/RDTSC ма
 
 Результат: pafish стал проходить почти все проверки.
 
-### 10.3. Этап 3: al-khaser debug + process-info
+### 11.3. Этап 3: al-khaser debug + process-info
 
 Что добавлено:
 - Новый модуль **`process_info_hooks`** — `NtQueryInformationProcess` (DebugPort, DebugFlags, DebugObjectHandle) + `NtClose` + `CloseHandle` с `__try/__except`.
@@ -1462,7 +1754,7 @@ DebuggerWrapper уже существовал с базовой CPUID/RDTSC ма
 
 Был обнаружен и исправлен баг: первая версия `IsSelfHandle` в process_info_hooks использовала `GetProcessId`, что приводило к бесконечной рекурсии. Заменено на сравнение псевдо-handle.
 
-### 10.4. Этап 4: input + module-hide
+### 11.4. Этап 4: input + module-hide
 
 Что добавлено:
 - Новый модуль **`input_hooks`** — `GetLastInputInfo` (для синхронизации с hooked GetTickCount).
@@ -1471,13 +1763,24 @@ DebuggerWrapper уже существовал с базовой CPUID/RDTSC ма
 
 Первая итерация `GetMappedFileName*` не сработала на Win10/11 из-за psapi forwarder-цепочки. Добавлен хук на `ntdll!NtQueryVirtualMemory` — нижний уровень, через который ходят все варианты `GetMappedFileName*`.
 
-### 10.5. Этап 5: DebuggerWrapper фиксы
+### 11.5. Этап 5: DebuggerWrapper фиксы
 
 Что сделано:
 - **CPUID off by default**. Утечка false-positive BP крэшила цель.
 - **Inject-race fix**: SuspendThread главного потока между CreateRemoteThread и EXIT_THREAD injector'а. Pafish (тонкий CRT) теперь успевает дождаться установки хуков.
 
-### 10.6. Текущее состояние
+### 11.6. Этап 6: host-layer (vb-masquerade.ps1)
+
+Что сделано:
+- Добавлен PowerShell-скрипт `vb-masquerade.ps1` для **host-side** маскировки VirtualBox-VM через `VBoxManage setextradata` и `modifyvm`.
+- 4 предустановленных профиля (Dell / Lenovo / HP / Asus), spoofят: SMBIOS/DMI (BIOS, System, Board, Chassis), ACPI OemId/CreatorId, дисковые серийники и модели (AHCI + IDE), MAC OUI, paravirt-провайдер (`none`), TSC mode (`TSCTiedToExecution=1`), HV-bit (`CPUM/EnableHVP=0`).
+- Backup + `-Restore` rollback в `%USERPROFILE%\.vbox-mask-backups\`.
+- Автодетект NEM-mode (хост с Hyper-V/WSL2/VBS) с пропуском несовместимых ключей и указанием, как отключить Hyper-V для полного покрытия.
+- Авто-fallback на VBox 6.x синтаксис `modifyvm` (`--paravirtprovider` без дефиса), если 7.x-флаги отклонены.
+
+**Эффект**: многие проверки pafish / al-khaser, для которых раньше нужны были MinHook трамплины внутри гостя, теперь проходят OK **без участия hooksbox** — данные чисты уже на уровне эмулируемого SMBIOS/ACPI/диска/MAC/CPUID. Гостевые компоненты переходят в режим «защита от хуков, debug-детекторы, GA-артефакты», что и есть их зона ответственности. См. таблицу разделения в 3.2 и таблицу эффекта в 9.6.
+
+### 11.7. Текущее состояние
 
 Pafish — все проверки OK (за исключением физически нерешаемых из user-mode).
 Al-khaser — большинство [GOOD]. Остаются [BAD]:
@@ -1485,14 +1788,18 @@ Al-khaser — большинство [GOOD]. Остаются [BAD]:
 - `Parent Process is explorer.exe` (runner-цепочка)
 - ещё пара экзотических проверок в timing-секции
 
+Рекомендованная конфигурация: `vb-masquerade.ps1` на хосте + `launcher.exe --debug-inject` в госте.
+
 ---
 
-## 11. Полная структура исходников
+## 12. Полная структура исходников
 
 ```
 hooxbox/
 ├── HooksBox.sln                          # Solution: 3 проекта
-├── README.md                             # Проектный README
+├── README.md                             # Проектный README (краткий)
+├── DOCUMENTATION.md                      # Полная техническая документация (этот файл)
+├── vb-masquerade.ps1                     # → HOST-side скрипт: VBoxManage-маскировка VM
 ├── .gitignore                            # .claude/, x64/, Debug/, Release/ исключены
 │
 ├── HooksBox/                             # → hooksbox.dll
@@ -1574,7 +1881,7 @@ hooxbox/
 
 ---
 
-## 12. Глоссарий
+## 13. Глоссарий
 
 | Термин | Значение |
 |---|---|
@@ -1593,6 +1900,12 @@ hooxbox/
 | **Loader-lock** | `LdrpLoaderLock` — критическая секция Windows-loader. Захватывается на время DllMain. COM/LoadLibrary внутри DllMain → deadlock. |
 | **Trampoline** | Маленький фрагмент кода, который восстанавливает оригинальные инструкции (которые MinHook затёр JMP'ом) и переходит обратно в оригинал. |
 | **Forwarder** | DLL export, который перенаправляет вызов в другую DLL/функцию. На Win10+ многие kernel32 функции — forwarder'ы в kernelbase. |
+| **VBoxManage** | CLI-утилита VirtualBox для управления VM (создание, конфигурация, запуск). Поставляется вместе с VirtualBox. Используется `vb-masquerade.ps1` через `setextradata` и `modifyvm`. |
+| **extradata** | Хранилище произвольных key=value параметров VM в её `.vbox`-XML. Часть ключей вида `VBoxInternal/...` читается VirtualBox-VMM при инициализации эмулируемых устройств — через них и подменяются SMBIOS/ACPI/disk-параметры. |
+| **NEM-mode** | Native Execution Manager. Режим VirtualBox, когда он не может использовать собственный гипервизор (`VBoxDrv`) из-за активного на хосте Hyper-V/WSL2/VBS/Windows Sandbox, и работает поверх Windows Hypervisor Platform. В NEM некоторые `VBoxInternal/*` ключи (TSC, CPUID HVP) молча игнорируются. |
+| **DMI / SMBIOS** | Стандартизованные таблицы метаданных о железе (BIOS vendor, system manufacturer/product/serial, baseboard, chassis). Получаются через `GetSystemFirmwareTable('RSMB', ...)` или WMI `Win32_BIOS/ComputerSystem/BaseBoard`. VirtualBox эмулирует их через `pcbios` device. |
+| **ACPI** | Advanced Configuration and Power Interface. Стандарт описания железа через таблицы (RSDT, FACP, DSDT и т.д.). Содержит OEM-string поля, по которым тоже детектируется VBox. Эмулируется в VirtualBox через `acpi` device. |
+| **OUI** | Organizationally Unique Identifier. Первые 3 байта MAC-адреса, идентифицирующие производителя. VirtualBox использует `08:00:27` для эмулируемых адаптеров. `vb-masquerade.ps1` подставляет реальные OUI Dell (`00:14:22`), Lenovo (`00:1F:16`), HP (`00:1B:78`), Asus (`00:1F:C6`). |
 
 ---
 
