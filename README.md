@@ -380,9 +380,7 @@ demand.
   instruction, which has no API surface and doesn't trap in user mode.
   Cannot be masked from a DLL hook; would require patching the `sldt`
   opcode in the target's `.text` (same risk profile as
-  `DebuggerWrapper`-style CPUID BPs). Note that the al-khaser test itself
-  is broken — it compares against `0xdead0000`, a value bare-metal also
-  doesn't return, so the check shows BAD even outside a VM.
+  `DebuggerWrapper`-style CPUID BPs).
 - **`IsParentExplorerExe` (al-khaser)** — reports BAD because the target is
   launched by `launcher.exe → DebuggerWrapper.exe`, not by `explorer.exe`.
   Not a masking miss; just a side effect of the chosen runner.
